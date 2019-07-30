@@ -18,7 +18,8 @@ It also provides two route endpoint functions:
 
 ## Setup
 
-```javascript
+javascript:
+```
 var CASAuthentication = require('cas-authentication-user');
 
 var cas = new CASAuthentication({
