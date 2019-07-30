@@ -90,8 +90,8 @@ app.get( '/api/user', cas.block, function ( req, res ) {
     res.json( { cas_user: req.session[ cas.session_name ] } );
 });
 
-// An example of accessing the CAS userType session variable. This could be used to
-// retrieve your own local user records based on authenticated CAS username.
+// An example of accessing the CAS userType session variable. userType by default is an empty
+// string, so you will have to retrieve your own local user records and set the variable yourself.
 app.get( '/api/user', cas.block, function ( req, res ) {
     res.json( { cas_user_type: req.session.userType } );
 });
