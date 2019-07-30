@@ -53,8 +53,8 @@ var cas = new CASAuthentication({
 
 ## Usage
 
+javascript:
 ```
-javascript
 var app = require('express')();
 var session = require('express-session');
 var CASAuthentication = require('cas-authentication');
