@@ -1,0 +1,62 @@
+{
+  "_from": "cas-authentication-user",
+  "_id": "cas-authentication-user@0.0.9",
+  "_inBundle": false,
+  "_integrity": "sha1-zd3aRBUIjuW6v1WUm6cO8HA+nGw=",
+  "_location": "/cas-authentication-new",
+  "_phantomChildren": {},
+  "_requested": {
+    "type": "tag",
+    "registry": true,
+    "raw": "cas-authentication-new",
+    "name": "cas-authentication-new",
+    "escapedName": "cas-authentication-new",
+    "rawSpec": "",
+    "saveSpec": null,
+    "fetchSpec": "latest"
+  },
+  "_requiredBy": [
+    "#USER",
+    "/"
+  ],
+  "_resolved": "https://registry.npmjs.org/cas-authentication-new/-/cas-authentication-new-0.0.8.tgz",
+  "_shasum": "cdddda4415088ee5babf55949ba70ef0703e9c6c",
+  "_spec": "cas-authentication-new",
+  "_where": "/Users/seth/Desktop/Chapel",
+  "author": {
+    "name": "Seth Wheeler",
+    "email": "wheelersc@cox.net"
+  },
+  "bugs": {
+    "url": "https://github.com/kylepixel/cas-authentication/issues"
+  },
+  "bundleDependencies": false,
+  "dependencies": {
+    "xml2js": "^0.4.8"
+  },
+  "deprecated": false,
+  "description": "A CAS authentication library designed to be used as middleware for an Express server.",
+  "devDependencies": {
+    "express": "^4.12.3",
+    "express-session": "^1.11.1"
+  },
+  "homepage": "https://github.com/kylepixel/cas-authentication",
+  "keywords": [
+    "cas",
+    "central authentication service",
+    "saml",
+    "auth",
+    "authentication",
+    "login",
+    "middleware",
+    "express"
+  ],
+  "license": "MIT",
+  "main": "index.js",
+  "name": "cas-authentication-new",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kylepixel/cas-authentication.git"
+  },
+  "version": "0.0.8"
+}
