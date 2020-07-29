@@ -235,7 +235,7 @@ CASAuthentication.prototype.login = function (req, res, next) {
   req.session.cas_return_to = req.query.returnTo || '/';
   // Set up the query parameters.
   const query = {
-    service: this.service_url + url.parse(req.url).pathname,
+    service: this.service_url + req.session.cas_return_to,
   };
   if (this.renew) {
     query.renew = this.renew;
