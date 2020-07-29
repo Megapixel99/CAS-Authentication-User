@@ -14,7 +14,7 @@ It also provides two route endpoint functions:
 
 ## Installation
 
-    npm install cas-authentication-user
+npm install cas-authentication-user
 
 ## Setup
 
@@ -23,16 +23,16 @@ javascript:
 var CASAuthentication = require('cas-authentication-user');
 
 var cas = new CASAuthentication({
-    cas_url         : 'https://my-cas-host.com/cas',
-    service_url     : 'https://my-service-host.com',
-    cas_version     : '3.0',
-    renew           : false,
-    is_dev_mode     : false,
-    dev_mode_user   : '',
-    dev_mode_info   : {},
-    session_name    : 'cas_user',
-    session_info    : 'cas_userinfo',
-    destroy_session : false
+cas_url         : 'https://my-cas-host.com/cas',
+service_url     : 'https://my-service-host.com',
+cas_version     : '3.0',
+renew           : false,
+is_dev_mode     : false,
+dev_mode_user   : '',
+dev_mode_info   : {},
+session_name    : 'cas_user',
+session_info    : 'cas_userinfo',
+destroy_session : false
 });
 ```
 
@@ -61,39 +61,39 @@ var CASAuthentication = require('cas-authentication');
 
 // Set up an Express session, which is required for CASAuthentication.
 app.use( session({
-    secret            : 'super secret key',
-    resave            : false,
-    saveUninitialized : true
+secret            : 'super secret key',
+resave            : false,
+saveUninitialized : true
 }));
 
 // Create a new instance of CASAuthentication.
 var cas = new CASAuthentication({
-    cas_url     : 'https://my-cas-host.com/cas',
-    service_url : 'https://my-service-host.com'
+cas_url     : 'https://my-cas-host.com/cas',
+service_url : 'https://my-service-host.com'
 });
 
 // Unauthenticated clients will be redirected to the CAS login and then back to
 // this route once authenticated.
 app.get( '/app', cas.bounce, function ( req, res ) {
-    res.send( '<html><body>Hello!</body></html>' );
+res.send( '<html><body>Hello!</body></html>' );
 });
 
-// Unauthenticated clients will receive a 401 Unauthorized response instead of
+// All clients will receive a 401 Unauthorized response instead of
 // the JSON data.
 app.get( '/api', cas.block, function ( req, res ) {
-    res.json( { success: true } );
+res.json( { success: true } );
 });
 
 // An example of accessing the CAS user session variable. This could be used to
 // retrieve your own local user records based on authenticated CAS username.
 app.get( '/api/user', cas.block, function ( req, res ) {
-    res.json( { cas_user: req.session[ cas.session_name ] } );
+res.json( { cas_user: req.session[ cas.session_name ] } );
 });
 
 // An example of accessing the CAS userType session variable. userType by default is an empty
 // string, so you will have to retrieve your own local user records and set the variable yourself.
 app.get( '/api/user', cas.block, function ( req, res ) {
-    res.json( { cas_user_type: req.session.userType } );
+res.json( { cas_user_type: req.session.userType } );
 });
 
 // Unauthenticated clients will be redirected to the CAS login and then to the
@@ -103,4 +103,8 @@ app.get( '/authenticate', cas.bounce_redirect );
 // This route will de-authenticate the client with the Express server and then
 // redirect the client to the CAS logout page.
 app.get( '/logout', cas.logout );
+
+// This route will authenticate the client with the Express server and then
+// redirect the client to the CAS login page.
+app.get( '/login', cas.login );
 ```
