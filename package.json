@@ -1,16 +1,16 @@
 {
   "_from": "cas-authentication-user",
-  "_id": "cas-authentication-user@0.0.9",
+  "_id": "cas-authentication-user@0.1.0",
   "_inBundle": false,
   "_integrity": "sha1-zd3aRBUIjuW6v1WUm6cO8HA+nGw=",
-  "_location": "/cas-authentication-new",
+  "_location": "/cas-authentication-user",
   "_phantomChildren": {},
   "_requested": {
     "type": "tag",
     "registry": true,
-    "raw": "cas-authentication-new",
-    "name": "cas-authentication-new",
-    "escapedName": "cas-authentication-new",
+    "raw": "cas-authentication-user",
+    "name": "cas-authentication-user",
+    "escapedName": "cas-authentication-user",
     "rawSpec": "",
     "saveSpec": null,
     "fetchSpec": "latest"
@@ -19,16 +19,14 @@
     "#USER",
     "/"
   ],
-  "_resolved": "https://registry.npmjs.org/cas-authentication-new/-/cas-authentication-new-0.0.8.tgz",
   "_shasum": "cdddda4415088ee5babf55949ba70ef0703e9c6c",
-  "_spec": "cas-authentication-new",
-  "_where": "/Users/seth/Desktop/Chapel",
+  "_spec": "cas-authentication-user",
   "author": {
     "name": "Seth Wheeler",
     "email": "wheelersc@cox.net"
   },
   "bugs": {
-    "url": "https://github.com/kylepixel/cas-authentication/issues"
+    "url": "https://github.com/Megapixel99/CAS-Authentication-User/issues"
   },
   "bundleDependencies": false,
   "dependencies": {
@@ -40,7 +38,7 @@
     "express": "^4.12.3",
     "express-session": "^1.11.1"
   },
-  "homepage": "https://github.com/kylepixel/cas-authentication",
+  "homepage": "https://github.com/Megapixel99/CAS-Authentication-User",
   "keywords": [
     "cas",
     "central authentication service",
@@ -53,10 +51,10 @@
   ],
   "license": "MIT",
   "main": "index.js",
-  "name": "cas-authentication-new",
+  "name": "cas-authentication-user",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kylepixel/cas-authentication.git"
+    "url": "git+https://github.com/Megapixel99/CAS-Authentication-User.git"
   },
-  "version": "0.0.8"
+  "version": "0.1.0"
 }
