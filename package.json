@@ -1,26 +1,4 @@
 {
-  "_from": "cas-authentication-user",
-  "_id": "cas-authentication-user@0.1.0",
-  "_inBundle": false,
-  "_integrity": "sha1-zd3aRBUIjuW6v1WUm6cO8HA+nGw=",
-  "_location": "/cas-authentication-user",
-  "_phantomChildren": {},
-  "_requested": {
-    "type": "tag",
-    "registry": true,
-    "raw": "cas-authentication-user",
-    "name": "cas-authentication-user",
-    "escapedName": "cas-authentication-user",
-    "rawSpec": "",
-    "saveSpec": null,
-    "fetchSpec": "latest"
-  },
-  "_requiredBy": [
-    "#USER",
-    "/"
-  ],
-  "_shasum": "cdddda4415088ee5babf55949ba70ef0703e9c6c",
-  "_spec": "cas-authentication-user",
   "author": {
     "name": "Seth Wheeler",
     "email": "wheelersc@cox.net"
@@ -56,5 +34,5 @@
     "type": "git",
     "url": "git+https://github.com/Megapixel99/CAS-Authentication-User.git"
   },
-  "version": "0.1.0"
+  "version": "0.1.1"
 }
