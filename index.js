@@ -232,7 +232,7 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
 CASAuthentication.prototype.login = function (req, res, next) {
   // Save the return URL in the session. If an explicit return URL is set as a
   // query parameter, use that. Otherwise, just use the URL from the request.
-  req.session.cas_return_to = req.query.returnTo || '/';
+  req.session.cas_return_to = req.query.returnTo || req.path || '/';
   // Set up the query parameters.
   const query = {
     service: this.service_url + req.session.cas_return_to,
