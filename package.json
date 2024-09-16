@@ -8,13 +8,13 @@
   },
   "bundleDependencies": false,
   "dependencies": {
-    "xml2js": "^0.5.0"
+    "xml2js": "^0.6.2"
   },
   "deprecated": false,
   "description": "A CAS authentication library designed to be used as middleware for an Express server.",
   "devDependencies": {
-    "express": "^4.12.3",
-    "express-session": "^1.11.1"
+    "express": "^4.21.0",
+    "express-session": "^1.18.0"
   },
   "homepage": "https://github.com/Megapixel99/CAS-Authentication-User",
   "keywords": [
@@ -34,5 +34,5 @@
     "type": "git",
     "url": "git+https://github.com/Megapixel99/CAS-Authentication-User.git"
   },
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
