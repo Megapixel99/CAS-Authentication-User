@@ -19,7 +19,7 @@ npm install cas-authentication-user
 ## Setup
 
 javascript:
-```
+```javascript
 var CASAuthentication = require('cas-authentication-user');
 
 var cas = new CASAuthentication({
@@ -54,7 +54,7 @@ destroy_session : false
 ## Usage
 
 javascript:
-```
+```javascript
 var app = require('express')();
 var session = require('express-session');
 var CASAuthentication = require('cas-authentication');
