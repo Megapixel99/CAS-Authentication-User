@@ -38,7 +38,12 @@ const cas = new CASAuthentication({
   session_name: 'cas_user',
   session_info: 'cas_userinfo',
   destroy_session: false,
+  timeout: 10000,
+  regenerate_session: true,
 });
+
+const timeout: number = cas.timeout;
+const regenerates: boolean = cas.regenerate_session;
 
 // A minimal configuration is enough.
 const minimal = new CASAuthentication({
@@ -158,4 +163,4 @@ const notAString: string = someAttributes.displayname;
 someAttributes.address.toUpperCase();
 
 void minimal; void version; void port; void info; void strategyName; void client; void app;
-void marker; void notAString;
+void marker; void notAString; void timeout; void regenerates;

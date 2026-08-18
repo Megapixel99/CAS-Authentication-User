@@ -303,6 +303,13 @@ CASAuthentication.prototype.gateway = function (req, res, next) {
  * Handle a request with CAS authentication.
  */
 CASAuthentication.prototype._handle = function (req, res, next, authType) {
+  // Every path below reads or writes the session, so say so plainly rather than
+  // failing later with a TypeError about a property of undefined. Forgetting the
+  // session middleware is the most common way to misconfigure this library.
+  if (!req.session) {
+    throw new Error('CAS Authentication requires session support. Add express-session '
+      + '(or another middleware that populates req.session) before this middleware.');
+  }
   // If the session has been validated with CAS, no action is required.
   if (req.session[this.session_name]) {
     // If this is a bounce redirect, redirect the authenticated user.

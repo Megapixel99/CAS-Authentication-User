@@ -13,6 +13,13 @@ It also provides two route endpoint functions:
 - `bounce_redirect`: Acts just like `bounce` but once the client is authenticated they will be redirected to the provided _returnTo_ query parameter.
 - `logout`: De-authenticates the client with the Express server and then redirects them to the CAS logout page.
 
+## Requirements
+
+An Express session middleware such as
+[express-session](https://www.npmjs.com/package/express-session) must be
+installed ahead of this middleware, since the authenticated user is kept on
+`req.session`.
+
 ## Installation
 
 ```

@@ -285,3 +285,14 @@ test('a gateway route after logout does not see a stale userType', () => {
   assert.strictEqual(session.cas_user, undefined);
   assert.strictEqual(session.userType, undefined);
 });
+
+test('a missing session is reported as a configuration error', () => {
+  // Otherwise this surfaces as "Cannot read properties of undefined", which says
+  // nothing about the actual mistake.
+  const cas = casOf();
+  const req = { query: {}, url: '/app', path: '/app' };
+  ['bounce', 'block', 'gateway', 'bounce_redirect'].forEach((name) => {
+    assert.throws(() => cas[name](req, makeRes(), makeNext()),
+      /requires session support/, `${name} should explain the problem`);
+  });
+});
