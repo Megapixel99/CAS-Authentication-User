@@ -217,3 +217,52 @@ test('renew with gateway keeps prompting instead of falling through', async () =
     await app.close();
   }
 });
+
+test('middleware mounted on a sub-path sends CAS the full path', async () => {
+  // Inside a mounted router req.url and req.path drop the mount prefix, so a
+  // service URL built from them would send the client back to a path that does
+  // not exist.
+  const cas_server = await startCasServer(() => fx.CAS2_SUCCESS);
+  const app = await mount((a, cas) => {
+    const router = express.Router();
+    router.use((req, res, next) => {
+      cas.bounce(req, res, next);
+    }, (req, res) => res.json({ user: req.session[cas.session_name] || null }));
+    a.use('/portal', router);
+  }, { cas_url: `http://127.0.0.1:${cas_server.port}/cas` });
+  try {
+    const login = await get(app.port, '/portal/page');
+    assert.strictEqual(login.status, 302);
+    const serviceAtLogin = new URL(login.location).searchParams.get('service');
+    assert.strictEqual(serviceAtLogin, 'http://my-service-host.com/portal/page');
+
+    // CAS returns the client to that path with a ticket.
+    const back = await get(app.port, '/portal/page?ticket=ST-1', login.cookie);
+    assert.strictEqual(new URL(cas_server.requests[0].url, 'http://127.0.0.1')
+      .searchParams.get('service'), serviceAtLogin);
+    assert.strictEqual(back.status, 302);
+    assert.strictEqual(back.location, '/portal/page');
+  } finally {
+    await app.close();
+    await cas_server.close();
+  }
+});
+
+test('a mounted gateway check returns to the full path', async () => {
+  const app = await mount((a, cas) => {
+    const router = express.Router();
+    router.use(cas.gateway, (req, res) => res.json({ user: null }));
+    a.use('/portal', router);
+  });
+  try {
+    const first = await get(app.port, '/portal/page');
+    assert.strictEqual(first.status, 302);
+    const service = new URL(new URL(first.location).searchParams.get('service'));
+    assert.strictEqual(service.pathname, '/portal/page');
+
+    const second = await get(app.port, `${service.pathname}${service.search}`, first.cookie);
+    assert.strictEqual(second.status, 200);
+  } finally {
+    await app.close();
+  }
+});

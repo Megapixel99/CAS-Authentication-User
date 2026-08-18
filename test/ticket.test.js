@@ -166,3 +166,44 @@ test('block ignores a ticket in the query string and still 401s', async () => {
     await cas_server.close();
   }
 });
+
+test('a ticket validated with no saved return URL redirects to the current path', async () => {
+  // Reachable when the session did not survive the round trip, or when a client
+  // arrives at a ticket URL directly. Redirecting to undefined is not an option.
+  const cas_server = await startCasServer(() => fx.CAS2_SUCCESS);
+  try {
+    const cas = casFor(cas_server.port);
+    const req = makeReq({
+      url: '/app?ticket=ST-1', path: '/app', query: { ticket: 'ST-1' }, session: {},
+    });
+    const res = makeRes();
+    cas.bounce(req, res, makeNext());
+    await res.settled;
+    assert.strictEqual(req.session.cas_user, 'casuser');
+    assert.deepStrictEqual(res.redirects, ['/app']);
+  } finally {
+    await cas_server.close();
+  }
+});
+
+test('a ticket validated inside a mounted router redirects to the full path', async () => {
+  const cas_server = await startCasServer(() => fx.CAS2_SUCCESS);
+  try {
+    const cas = casFor(cas_server.port);
+    const req = makeReq({
+      originalUrl: '/portal/page?ticket=ST-1',
+      url: '/page?ticket=ST-1',
+      path: '/page',
+      query: { ticket: 'ST-1' },
+      session: {},
+    });
+    const res = makeRes();
+    cas.bounce(req, res, makeNext());
+    await res.settled;
+    assert.deepStrictEqual(res.redirects, ['/portal/page']);
+    assert.strictEqual(new URL(cas_server.requests[0].url, 'http://127.0.0.1')
+      .searchParams.get('service'), 'http://my-service-host.com/portal/page');
+  } finally {
+    await cas_server.close();
+  }
+});

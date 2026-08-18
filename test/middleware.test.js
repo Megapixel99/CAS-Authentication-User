@@ -95,10 +95,21 @@ test('login prefers an explicit returnTo over the request path', () => {
     'https://app.example.edu/deep/link');
 });
 
-test('login falls back to / when neither returnTo nor path is present', () => {
-  const req = makeReq({ path: undefined });
+test('login falls back to / when the request carries no usable path', () => {
+  const req = makeReq({ path: undefined, url: undefined, originalUrl: undefined });
   casOf().login(req, makeRes(), makeNext());
   assert.strictEqual(req.session.cas_return_to, '/');
+});
+
+test('the service URL keeps a router mount prefix', () => {
+  // Inside app.use('/portal', router) both req.url and req.path are relative to
+  // the mount point; only originalUrl has the prefix CAS must return to.
+  const req = makeReq({ originalUrl: '/portal/page', url: '/page', path: '/page' });
+  const res = makeRes();
+  casOf().bounce(req, res, makeNext());
+  assert.strictEqual(req.session.cas_return_to, '/portal/page');
+  assert.strictEqual(new URL(res.redirects[0]).searchParams.get('service'),
+    'https://app.example.edu/portal/page');
 });
 
 test('dev mode authenticates as the configured user without contacting CAS', () => {

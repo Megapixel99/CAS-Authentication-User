@@ -121,6 +121,23 @@ app.get('/logout', cas.logout);
 app.get('/login', cas.login);
 ```
 
+### Mounting on a sub-path
+
+The service URL sent to CAS is built from `req.originalUrl`, so mounting the
+middleware inside a router works as you would expect:
+
+```javascript
+const router = require('express').Router();
+router.get('/page', cas.bounce, ( req, res ) => res.send('Hello!'));
+app.use('/portal', router);
+// CAS is sent service=https://my-service-host.com/portal/page
+```
+
+Set `service_url` to the application's origin only - do not include the mount
+prefix. Versions before 0.3.0 built the service URL from the mount-relative
+path, which sent CAS a path with the prefix missing; if you compensated by
+putting the prefix into `service_url`, remove it.
+
 ## Gateway mode
 
 `bounce` and `block` both force a decision: log in, or be refused. Gateway mode

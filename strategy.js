@@ -57,7 +57,7 @@ function Strategy(options, verify) {
  * makes _serviceUrl below reproduce this exactly.
  */
 Strategy.prototype._serviceForRedirect = function (req) {
-  return this.cas.service_url + (req.path || url.parse(req.url).pathname || '/');
+  return this.cas.service_url + this.cas._requestPath(req);
 };
 
 /**
@@ -111,8 +111,10 @@ Strategy.prototype.authenticate = function (req, options) {
       return;
     }
     // Recorded in the session when there is one, and on the service URL either
-    // way, so the check cannot loop.
-    if (req.session) {
+    // way, so the check cannot loop. With renew set this redirect asks for a
+    // real login rather than a silent check, so it must not be recorded as one -
+    // otherwise abandoning the login form would leave the route anonymous.
+    if (req.session && !this.cas.renew) {
       req.session[CASAuthentication.GATEWAY_SESSION_FLAG] = true;
     }
     this.redirect(this._loginUrl(service, true));

@@ -378,3 +378,43 @@ test('the strategy no longer needs its cas_port fixed up by hand', async () => {
     await server.close();
   }
 });
+
+test('renew with gateway keeps prompting instead of falling through', async () => {
+  // renew takes precedence over gateway, so this is a real login redirect and
+  // must not be recorded as a gateway check.
+  const strategy = new Strategy({ ...BASE, renew: true });
+  const session = {};
+  const first = await runStrategy(strategy, makeReq({ session }), { gateway: true });
+  assert.strictEqual(first.type, 'redirect');
+  assert.strictEqual(new URL(first.location).searchParams.get('renew'), 'true');
+  assert.strictEqual(session[FLAG], undefined);
+
+  // The user abandons the CAS login form and comes back.
+  const second = await runStrategy(strategy, makeReq({ session }), { gateway: true });
+  assert.strictEqual(second.type, 'redirect');
+});
+
+test('the strategy service URL keeps a router mount prefix', async () => {
+  const outcome = await runStrategy(new Strategy({ ...BASE }), makeReq({
+    originalUrl: '/portal/login', url: '/login', path: '/login',
+  }));
+  assert.strictEqual(new URL(outcome.location).searchParams.get('service'),
+    'https://app.example.edu/portal/login');
+});
+
+test('the strategy validates against the mounted service URL', async () => {
+  const server = await startCasServer(() => fx.CAS2_SUCCESS);
+  try {
+    const outcome = await runStrategy(strategyFor(server.port), makeReq({
+      originalUrl: '/portal/login?ticket=ST-1',
+      url: '/login?ticket=ST-1',
+      path: '/login',
+      query: { ticket: 'ST-1' },
+    }));
+    assert.strictEqual(outcome.type, 'success');
+    assert.strictEqual(new URL(server.requests[0].url, 'http://127.0.0.1')
+      .searchParams.get('service'), 'http://my-service-host.com/portal/login');
+  } finally {
+    await server.close();
+  }
+});

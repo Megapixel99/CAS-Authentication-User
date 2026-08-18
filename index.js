@@ -45,6 +45,25 @@ const GATEWAY_SESSION_FLAG = 'cas_gateway_attempted';
 const GATEWAY_QUERY_PARAM = 'cas_gateway';
 
 /**
+ * The request URL as the client sent it, including any router mount prefix.
+ *
+ * Inside a mounted router (`app.use('/portal', router)`) both req.url and
+ * req.path are relative to the mount point, so building a service URL from them
+ * would hand CAS a path with the prefix missing - and CAS would return the
+ * client somewhere that does not exist. req.originalUrl keeps the prefix.
+ */
+function requestUrl(req) {
+  return req.originalUrl || req.url || '/';
+}
+
+/**
+ * The path portion of the request URL, mount prefix included.
+ */
+function requestPath(req) {
+  return url.parse(requestUrl(req)).pathname || req.path || '/';
+}
+
+/**
  * Appends a query parameter to a URL that may already carry a query string.
  */
 function appendQueryParam(target, param) {
@@ -328,7 +347,7 @@ CASAuthentication.prototype._returnToFor = function (req) {
       console.error(err);
     }
   }
-  return req.path || '/';
+  return requestPath(req);
 };
 
 /**
@@ -355,11 +374,12 @@ CASAuthentication.prototype._gatewayAlreadyChecked = function (req) {
  * original value.
  */
 CASAuthentication.prototype._serviceForRequest = function (req) {
-  const parsed = url.parse(req.url);
+  const parsed = url.parse(requestUrl(req));
   const search = (parsed.search || '').replace(/^\?/, '');
   const kept = search.split('&')
     .filter((pair) => pair !== '' && pair.split('=')[0] !== 'ticket');
-  return this.service_url + parsed.pathname + (kept.length ? `?${kept.join('&')}` : '');
+  return this.service_url + (parsed.pathname || requestPath(req))
+    + (kept.length ? `?${kept.join('&')}` : '');
 };
 
 /**
@@ -556,8 +576,15 @@ CASAuthentication.prototype._handleTicket = function (req, res, next, authType) 
     if (this.session_info) {
       req.session[this.session_info] = attributes || {};
     }
-    res.redirect(req.session.cas_return_to);
+    // cas_return_to is missing if the session did not survive the round trip, or
+    // if the client arrived at a ticket URL directly. Redirecting to the current
+    // path still lands them in the right place, minus the spent ticket.
+    res.redirect(req.session.cas_return_to || requestPath(req));
   });
+};
+
+CASAuthentication.prototype._requestPath = function (req) {
+  return requestPath(req);
 };
 
 CASAuthentication.GATEWAY_SESSION_FLAG = GATEWAY_SESSION_FLAG;
