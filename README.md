@@ -155,6 +155,19 @@ in the session as `''`, which is falsy, so the client would look unauthenticated
 on the very next request and be sent back to CAS - indefinitely. It is refused
 instead.
 
+### Query strings and the login round trip
+
+The service URL sent to CAS is the request path without its query string, so
+page parameters are not handed to the CAS server or written to its access logs.
+The trade-off is that a client sent to CAS from `/search?q=cats` comes back to
+`/search`. Pass `returnTo` when the destination matters:
+
+```javascript
+app.get('/search', cas.bounce, handler);   // returns to /search
+// A link that survives the round trip with its parameters:
+// /authenticate?returnTo=%2Fsearch%3Fq%3Dcats
+```
+
 ### The returnTo parameter
 
 `bounce_redirect` and `login` both accept a `returnTo` query parameter naming

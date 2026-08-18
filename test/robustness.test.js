@@ -151,3 +151,26 @@ test('a genuine username is still accepted', async () => {
     await cas_server.close();
   }
 });
+
+test('the timeout does not disturb a later request on a pooled socket', { timeout: 20000 }, async () => {
+  // Node 19+ enables keep-alive on the global agent, so a completed request's
+  // socket goes back to the pool. The timeout timer must not reach it there.
+  const cas_server = await startCasServer(() => 'yes\ncasuser\n');
+  try {
+    const cas = casFor(cas_server.port, { cas_version: '1.0', timeout: 200 });
+    for (let i = 0; i < 3; i += 1) {
+      const session = { cas_return_to: '/app' };
+      const res = makeRes();
+      cas.bounce(makeReq({
+        url: `/app?ticket=ST-${i}`, path: '/app', query: { ticket: `ST-${i}` }, session,
+      }), res, makeNext());
+      const outcome = await res.settled;
+      assert.strictEqual(outcome.type, 'redirect', `validation ${i} should succeed`);
+      assert.strictEqual(session.cas_user, 'casuser');
+      // Idle well past the timeout before reusing the agent.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } finally {
+    await cas_server.close();
+  }
+});
