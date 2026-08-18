@@ -42,7 +42,7 @@
   },
   "version": "0.3.0",
   "scripts": {
-    "test": "node --test \"test/*.test.js\" && npm run typecheck",
+    "test": "node --test test/*.test.js && npm run typecheck",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "types": "index.d.ts",
