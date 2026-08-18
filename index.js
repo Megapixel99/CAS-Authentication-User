@@ -102,6 +102,7 @@ function appendQueryParam(target, param) {
  * @property {string}  [session_name='cas_user']
  * @property {string}  [session_info=false]
  * @property {boolean} [destroy_session=false]
+ * @property {number}  [timeout=10000]
  */
 
 /**
@@ -230,6 +231,15 @@ function CASAuthentication(options) {
   this.session_info = ['2.0', '3.0', 'saml1.1'].indexOf(this.cas_version) >= 0 && options.session_info
     !== undefined ? options.session_info : false;
   this.destroy_session = options.destroy_session !== undefined ? !!options.destroy_session : false;
+
+  // Ticket validation is a server-to-server call, so a CAS server that accepts
+  // the connection and then never answers would otherwise hold the client's
+  // request open forever. 0 disables the timeout.
+  const timeout = options.timeout !== undefined ? Number(options.timeout) : 10000;
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error('CAS Authentication requires timeout to be a non-negative number.');
+  }
+  this.timeout = timeout;
 
   // Bind the prototype routing methods to this instance of CASAuthentication.
   this.bounce = this.bounce.bind(this);
@@ -558,8 +568,19 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       this._validate(body, (err, user, attributes) => {
         if (err) {
           console.error(err);
+          done(err);
+          return;
         }
-        done(err, user, attributes);
+        // CAS reported success without a usable username. Storing an empty
+        // string would leave the client looking unauthenticated on every later
+        // request, which loops between the application and CAS indefinitely.
+        if (user === undefined || user === null || String(user).trim() === '') {
+          const blank = new Error('CAS authentication succeeded without a username.');
+          console.error(blank);
+          done(blank);
+          return;
+        }
+        done(null, user, attributes);
       });
     });
     response.on('error', (err) => {
@@ -572,6 +593,14 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
     console.error('Request error with CAS: ', err);
     done(err);
   });
+
+  if (this.timeout > 0) {
+    // setTimeout only reports socket inactivity; destroying the request is what
+    // turns that into an error the caller sees.
+    request.setTimeout(this.timeout, () => {
+      request.destroy(new Error(`CAS request timed out after ${this.timeout}ms.`));
+    });
+  }
 
   if (post_data !== null) {
     request.write(post_data);

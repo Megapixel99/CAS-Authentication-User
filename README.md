@@ -53,6 +53,7 @@ let cas = new CASAuthentication({
 | session_name | _string_ | The name of the session variable that will store the CAS user once they are authenticated. | _"cas_user"_ |
 | session_info | _string_ | The name of the session variable that will store the CAS user information once they are authenticated. If set to false (or something that evaluates as false), the additional information supplied by the CAS will not be forwarded. This will not work with CAS 1.0, as it does not support additional user information. | _false_ |
 | destroy_session | _boolean_ | If true, the logout function will destroy the entire session upon CAS logout. Otherwise, it will only delete the session variable storing the CAS user. | _false_ |
+| timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation request before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely. Set to 0 to wait forever. | _10000_ |
 
 ## Usage
 
@@ -120,6 +121,17 @@ app.get('/logout', cas.logout);
 // redirect the client to the CAS login page.
 app.get('/login', cas.login);
 ```
+
+### Validation failures
+
+A ticket that CAS rejects, a CAS server that cannot be reached, one that times
+out, and one that reports success without a username are all treated the same
+way: `bounce` and `block` answer 401, and `gateway` continues unauthenticated.
+
+The username case matters more than it looks. An empty username would be stored
+in the session as `''`, which is falsy, so the client would look unauthenticated
+on the very next request and be sent back to CAS - indefinitely. It is refused
+instead.
 
 ### The returnTo parameter
 

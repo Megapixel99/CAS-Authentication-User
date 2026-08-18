@@ -31,6 +31,8 @@ declare class CASAuthentication {
   /** Session key holding the CAS attributes, or `false` when not forwarded. */
   readonly session_info: string | false;
   readonly destroy_session: boolean;
+  /** Milliseconds before a ticket validation request is abandoned. */
+  readonly timeout: number;
 
   /**
    * Redirects an unauthenticated client to the CAS login page and then back to
@@ -147,6 +149,11 @@ declare namespace CASAuthentication {
      * variables. Defaults to `false`.
      */
     destroy_session?: boolean;
+    /**
+     * Milliseconds to wait for the CAS server to answer a ticket validation
+     * request before giving up. `0` waits indefinitely. Defaults to `10000`.
+     */
+    timeout?: number;
   }
 
   interface ValidateTicketParams {
