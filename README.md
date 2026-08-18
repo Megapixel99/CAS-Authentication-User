@@ -1,5 +1,7 @@
 # CAS Authentication for Express
 
+[![CI](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml/badge.svg)](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml)
+
 Middleware and route handlers that authenticate an [Express](https://expressjs.com/) application against a [CAS](https://apereo.github.io/cas/development/protocol/CAS-Protocol.html) server.
 
 All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 202 tests across 12 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
@@ -289,6 +291,8 @@ $ npm test
 ```
 
 That runs the suite on [Node's built-in test runner](https://nodejs.org/api/test.html) and then type-checks the declarations against a file written the way a consumer would write one. No CAS server is needed, since the tests stand up a local HTTP server that answers as one; `test/session-integration.test.js` and `test/passport-integration.test.js` go further and drive the middleware through real Express, real express-session and real Passport over real HTTP (no doubles for any of the three), which is what catches the class of bug a hand-written session double hides.
+
+CI runs both commands on Node 20, 22, 24 and 26. A second job covers what no test can: the `files` field decides what a consumer actually receives, so that job packs the tarball, installs it into an empty project with `--omit=dev`, and checks that both entry points load with xml2js as the only dependency present. Of those four versions only 22, 24 and 26 are still in support (Node 20 reached end of life on 2026-04-30); 20 is there because the institutions this package is aimed at upgrade slowly, and knowing it still works is worth a job.
 
 ## Upgrading to 0.3.0
 
