@@ -121,6 +121,19 @@ app.get('/logout', cas.logout);
 app.get('/login', cas.login);
 ```
 
+### The returnTo parameter
+
+`bounce_redirect` and `login` both accept a `returnTo` query parameter naming
+where to send the client once they are authenticated. Because that value comes
+from the client, only a same-origin path is accepted: it has to begin with a
+single `/`. An absolute URL, a protocol-relative `//host` path, or a scheme such
+as `javascript:` is refused, and the client goes to the requested path instead.
+
+Without that restriction an attacker could hand a victim a link that logs them
+in at the real CAS server and then lands them on a site of the attacker's
+choosing - a ready-made phishing flow. Versions before 0.3.0 redirected to
+whatever `returnTo` contained.
+
 ### Mounting on a sub-path
 
 The service URL sent to CAS is built from `req.originalUrl`, so mounting the

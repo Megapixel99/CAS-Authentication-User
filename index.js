@@ -64,6 +64,26 @@ function requestPath(req) {
 }
 
 /**
+ * Whether a client-supplied returnTo is a safe same-origin path.
+ *
+ * Anything that could carry the client to another origin is rejected: an
+ * absolute URL, a protocol-relative `//host` path, the `/\host` variant some
+ * browsers normalise to one, and schemes such as `javascript:`. Without this
+ * check an attacker can hand a user a link that logs them in through the real
+ * CAS server and then lands them on a site of the attacker's choosing, which is
+ * a ready-made credential-phishing flow.
+ */
+function isSafeReturnTo(value) {
+  if (typeof value !== 'string' || value === '') {
+    return false;
+  }
+  if (value.charAt(0) !== '/') {
+    return false;
+  }
+  return value.charAt(1) !== '/' && value.charAt(1) !== '\\';
+}
+
+/**
  * Appends a query parameter to a URL that may already carry a query string.
  */
 function appendQueryParam(target, param) {
@@ -272,7 +292,13 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   if (req.session[this.session_name]) {
     // If this is a bounce redirect, redirect the authenticated user.
     if (authType === AUTH_TYPE.BOUNCE_REDIRECT) {
-      req.session.cas_return_to = req.query.returnTo || url.parse(req.url).path;
+      // A rejected returnTo falls back to where the client already is. The
+      // fallback keeps the query string, unlike the service URL sent to CAS,
+      // because this redirect stays inside the application.
+      const returnTo = req.query && req.query.returnTo;
+      req.session.cas_return_to = isSafeReturnTo(returnTo)
+        ? returnTo
+        : (url.parse(requestUrl(req)).path || requestPath(req));
       res.redirect(req.session.cas_return_to);
     }
     // Otherwise, allow them through to their request.
@@ -336,10 +362,11 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
  */
 CASAuthentication.prototype._returnToFor = function (req) {
   const returnTo = req.query && req.query.returnTo;
-  // Only a usable string counts. Express's query parser yields an array for a
-  // repeated parameter and an object for a bracketed one, and an empty value has
-  // to fall back to the request path rather than redirect the client to nothing.
-  if (typeof returnTo === 'string' && returnTo !== '') {
+  // Only a safe same-origin path counts. That rules out an off-site redirect,
+  // and also the array Express yields for a repeated parameter, the object it
+  // yields for a bracketed one, and an empty value that would otherwise redirect
+  // the client to nothing.
+  if (isSafeReturnTo(returnTo)) {
     try {
       return encodeURI(returnTo);
     } catch (err) {
