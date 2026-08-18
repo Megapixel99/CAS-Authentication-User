@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "commonjs",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": [
+      "node",
+      "express",
+      "express-session",
+      "passport"
+    ]
+  },
+  "files": [
+    "index.d.ts",
+    "strategy.d.ts",
+    "test/types/usage.ts"
+  ]
+}
