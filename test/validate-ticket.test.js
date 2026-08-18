@@ -213,3 +213,29 @@ test('the SAML validation request sends an empty ticket query parameter', async 
     await server.close();
   }
 });
+
+test('the SAML RequestID host comes from req.hostname, not req.host', async () => {
+  // req.host is deprecated in Express 4 and changed meaning in Express 5, where
+  // it includes the port. The two differ here so the preference is pinned.
+  const server = await startCasServer(() => fx.SAML_SUCCESS);
+  try {
+    const cas = casFor(server.port, { cas_version: 'saml1.1' });
+    const req = {
+      url: '/app?ticket=ST-1',
+      path: '/app',
+      query: { ticket: 'ST-1' },
+      hostname: 'app.example.edu',
+      host: 'app.example.edu:3000',
+      session: { cas_return_to: '/app' },
+    };
+    await new Promise((resolve) => {
+      cas.bounce(req, { redirect: () => resolve(), sendStatus: () => resolve() }, () => resolve());
+    });
+    const { body } = server.requests[0];
+    assert.match(body, /RequestID="_app\.example\.edu\.\d+"/);
+    assert.ok(!body.includes('app.example.edu:3000'),
+      'the port-bearing req.host value must not be used');
+  } finally {
+    await server.close();
+  }
+});

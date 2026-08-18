@@ -54,6 +54,7 @@ let cas = new CASAuthentication({
 | session_info | _string_ | The name of the session variable that will store the CAS user information once they are authenticated. If set to false (or something that evaluates as false), the additional information supplied by the CAS will not be forwarded. This will not work with CAS 1.0, as it does not support additional user information. | _false_ |
 | destroy_session | _boolean_ | If true, the logout function will destroy the entire session upon CAS logout. Otherwise, it will only delete the session variable storing the CAS user. | _false_ |
 | timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation request before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely. Set to 0 to wait forever. | _10000_ |
+| regenerate_session | _boolean_ | If true, the session id is regenerated when a client authenticates, so a session fixed by an attacker beforehand does not carry over. Data already in the session is preserved; only the id changes. | _true_ |
 
 ## Usage
 
@@ -121,6 +122,20 @@ app.get('/logout', cas.logout);
 // redirect the client to the CAS login page.
 app.get('/login', cas.login);
 ```
+
+### Session handling on login
+
+When a client authenticates, the session id is regenerated. Without that, an
+attacker who can plant a session cookie on a victim before they log in still
+holds a valid handle on the authenticated session afterwards - session fixation.
+Anything the application had already stored in the session is copied across, so
+only the id changes; set `regenerate_session: false` to switch it off.
+
+`logout` removes every session key this library writes: the CAS username, the
+CAS attributes, `cas_return_to`, `userType`, and the gateway flag. `userType`
+matters most - it is the one applications tend to authorise on, and leaving the
+previous user's value behind while their username is gone invites acting on a
+stale privilege. With `destroy_session: true` the whole session goes instead.
 
 ### Validation failures
 

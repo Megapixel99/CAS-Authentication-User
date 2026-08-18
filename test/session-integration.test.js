@@ -266,3 +266,51 @@ test('a mounted gateway check returns to the full path', async () => {
     await app.close();
   }
 });
+
+test('logging in regenerates the session id but keeps application data', async () => {
+  // Session fixation: an attacker who plants a session cookie before login must
+  // not still hold a handle on the authenticated session afterwards.
+  const cas_server = await startCasServer(() => fx.CAS2_SUCCESS);
+  const app = await mount((a, cas) => {
+    a.get('/seed', (req, res) => { req.session.cart = ['book']; res.json({ sid: req.sessionID }); });
+    a.get('/id', (req, res) => res.json({
+      sid: req.sessionID, cart: req.session.cart || null, user: req.session.cas_user || null,
+    }));
+    a.use((req, res, next) => { cas.bounce(req, res, next); },
+      (req, res) => res.json({ ok: true }));
+  }, { cas_url: `http://127.0.0.1:${cas_server.port}/cas` });
+  try {
+    const seeded = await get(app.port, '/seed');
+    const before = JSON.parse(seeded.body).sid;
+    await get(app.port, '/app', seeded.cookie);
+    const authed = await get(app.port, '/app?ticket=ST-1', seeded.cookie);
+    const after = JSON.parse((await get(app.port, '/id', authed.cookie)).body);
+
+    assert.notStrictEqual(after.sid, before, 'session id must change on login');
+    assert.strictEqual(after.user, 'casuser');
+    assert.deepStrictEqual(after.cart, ['book'], 'application data must survive');
+  } finally {
+    await app.close();
+    await cas_server.close();
+  }
+});
+
+test('regenerate_session: false keeps the original session id', async () => {
+  const cas_server = await startCasServer(() => fx.CAS2_SUCCESS);
+  const app = await mount((a, cas) => {
+    a.get('/id', (req, res) => res.json({ sid: req.sessionID, user: req.session.cas_user || null }));
+    a.use((req, res, next) => { cas.bounce(req, res, next); }, (req, res) => res.json({ ok: true }));
+  }, { cas_url: `http://127.0.0.1:${cas_server.port}/cas`, regenerate_session: false });
+  try {
+    const first = await get(app.port, '/id');
+    const before = JSON.parse(first.body).sid;
+    await get(app.port, '/app', first.cookie);
+    const authed = await get(app.port, '/app?ticket=ST-1', first.cookie);
+    const after = JSON.parse((await get(app.port, '/id', authed.cookie)).body);
+    assert.strictEqual(after.sid, before);
+    assert.strictEqual(after.user, 'casuser');
+  } finally {
+    await app.close();
+    await cas_server.close();
+  }
+});

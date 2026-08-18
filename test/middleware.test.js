@@ -251,3 +251,37 @@ test('the page query string is not sent to CAS', () => {
   assert.strictEqual(service, 'https://app.example.edu/reset');
   assert.ok(!service.includes('s3cret'), 'page parameters must not reach the CAS server');
 });
+
+test('logout clears every session key this library writes', () => {
+  // userType is authorisation-relevant: leaving the previous user's value while
+  // their username is gone lets an app that reads it alone act on stale
+  // privilege.
+  const cas = casOf({ session_info: 'cas_info' });
+  const req = makeReq({
+    session: {
+      cas_user: 'alice',
+      cas_info: { email: 'alice@example.edu' },
+      userType: 'admin',
+      cas_return_to: '/secret',
+      mine: 'keep',
+    },
+  });
+  cas.logout(req, makeRes(), makeNext());
+  assert.deepStrictEqual(Object.keys(req.session), ['mine']);
+});
+
+test('a gateway route after logout does not see a stale userType', () => {
+  const cas = casOf();
+  const session = { cas_user: 'alice', userType: 'admin' };
+  cas.logout(makeReq({ session }), makeRes(), makeNext());
+  assert.strictEqual(session.userType, undefined);
+
+  // The client then reaches a gateway route on the same session. It passes
+  // through unauthenticated, and must not carry the old privilege with it.
+  session[CASAuthentication.GATEWAY_SESSION_FLAG] = true;
+  const next = makeNext();
+  cas.gateway(makeReq({ session }), makeRes(), next);
+  assert.strictEqual(next.calls.length, 1);
+  assert.strictEqual(session.cas_user, undefined);
+  assert.strictEqual(session.userType, undefined);
+});

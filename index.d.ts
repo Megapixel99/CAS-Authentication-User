@@ -33,6 +33,8 @@ declare class CASAuthentication {
   readonly destroy_session: boolean;
   /** Milliseconds before a ticket validation request is abandoned. */
   readonly timeout: number;
+  /** Whether the session id is regenerated on successful login. */
+  readonly regenerate_session: boolean;
 
   /**
    * Redirects an unauthenticated client to the CAS login page and then back to
@@ -154,6 +156,12 @@ declare namespace CASAuthentication {
      * request before giving up. `0` waits indefinitely. Defaults to `10000`.
      */
     timeout?: number;
+    /**
+     * Regenerate the session id on successful login, so a session fixed by an
+     * attacker beforehand does not carry over. Application data in the session
+     * is preserved; only the id changes. Defaults to `true`.
+     */
+    regenerate_session?: boolean;
   }
 
   interface ValidateTicketParams {
