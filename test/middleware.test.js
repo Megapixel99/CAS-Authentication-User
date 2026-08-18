@@ -291,7 +291,7 @@ test('a missing session is reported as a configuration error', () => {
   // nothing about the actual mistake.
   const cas = casOf();
   const req = { query: {}, url: '/app', path: '/app' };
-  ['bounce', 'block', 'gateway', 'bounce_redirect'].forEach((name) => {
+  ['bounce', 'block', 'gateway', 'bounce_redirect', 'login', 'logout'].forEach((name) => {
     assert.throws(() => cas[name](req, makeRes(), makeNext()),
       /requires session support/, `${name} should explain the problem`);
   });

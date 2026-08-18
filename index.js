@@ -303,13 +303,7 @@ CASAuthentication.prototype.gateway = function (req, res, next) {
  * Handle a request with CAS authentication.
  */
 CASAuthentication.prototype._handle = function (req, res, next, authType) {
-  // Every path below reads or writes the session, so say so plainly rather than
-  // failing later with a TypeError about a property of undefined. Forgetting the
-  // session middleware is the most common way to misconfigure this library.
-  if (!req.session) {
-    throw new Error('CAS Authentication requires session support. Add express-session '
-      + '(or another middleware that populates req.session) before this middleware.');
-  }
+  this._requireSession(req);
   // If the session has been validated with CAS, no action is required.
   if (req.session[this.session_name]) {
     // If this is a bounce redirect, redirect the authenticated user.
@@ -400,6 +394,20 @@ CASAuthentication.prototype._returnToFor = function (req) {
 };
 
 /**
+ * Asserts that a session middleware is in place.
+ *
+ * Every entry point reads or writes the session, so this says so plainly rather
+ * than failing later with a TypeError about a property of undefined. Forgetting
+ * the session middleware is the most common way to misconfigure this library.
+ */
+CASAuthentication.prototype._requireSession = function (req) {
+  if (!req.session) {
+    throw new Error('CAS Authentication requires session support. Add express-session '
+      + '(or another middleware that populates req.session) before this middleware.');
+  }
+};
+
+/**
  * Reports whether a gateway check has already been made for this client.
  *
  * The session flag is the primary record. The query marker is the fallback for
@@ -439,6 +447,7 @@ CASAuthentication.prototype._serviceForRequest = function (req) {
  *   sign-on session exists.
  */
 CASAuthentication.prototype._redirectToCas = function (req, res, useGateway) {
+  this._requireSession(req);
   // Save the return URL in the session. If an explicit return URL is set as a
   // query parameter, use that. Otherwise, just use the URL from the request.
   req.session.cas_return_to = this._returnToFor(req);
@@ -474,6 +483,7 @@ CASAuthentication.prototype.login = function (req, res, next) {
  * Logout the currently logged in CAS user.
  */
 CASAuthentication.prototype.logout = function (req, res, next) {
+  this._requireSession(req);
   // Destroy the entire session if the option is set.
   if (this.destroy_session) {
     req.session.destroy((err) => {
