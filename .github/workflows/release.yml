@@ -76,11 +76,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Deliberately no registry-url here. setup-node would write an .npmrc
+      # containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`, and this
+      # job sets no such token, so npm sent an unresolved credential and answered
+      # E404 rather than falling back to OIDC. registry.npmjs.org is the default
+      # registry anyway, and trusted publishing needs no auth line at all.
       - uses: actions/setup-node@v7
         with:
           node-version: 24.x
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
 
@@ -121,6 +125,21 @@ jobs:
           fi
           npm --version
 
+      - name: Publishing preconditions
+        if: needs.check.outputs.npm_missing == 'true'
+        run: |
+          echo "npm:  $(npm --version)"
+          echo "OIDC request URL present:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}${ACTIONS_ID_TOKEN_REQUEST_URL:-NO (id-token: write missing)}"
+          echo "OIDC request token present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-NO}"
+          echo "registry: $(npm config get registry)"
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            echo "userconfig $NPM_CONFIG_USERCONFIG contains (values redacted):"
+            sed 's/=.*/=<redacted>/' "$NPM_CONFIG_USERCONFIG" | sed 's/^/  /'
+            echo "note: an _authToken line here overrides trusted publishing."
+          else
+            echo "no userconfig .npmrc, which is what trusted publishing wants."
+          fi
+
       # No token. npm verifies the OIDC token minted by id-token: write against
       # the trusted publisher configured for this package, which has to name this
       # repository and this workflow file (release.yml). Provenance attestations
@@ -131,7 +150,11 @@ jobs:
       # access -> add a GitHub Actions publisher for Megapixel99/CAS-Authentication-User
       # with workflow `release.yml`.
       - name: Publish to npm via trusted publishing
+        id: npm_publish
         if: needs.check.outputs.npm_missing == 'true'
+        # The run still fails at the end; this only stops one registry's failure
+        # from skipping the other.
+        continue-on-error: true
         run: npm publish
 
       # GitHub Packages only accepts a package whose scope matches the repository
@@ -140,12 +163,14 @@ jobs:
       # restored afterwards, so the npm name is untouched. GitHub Packages has no
       # OIDC equivalent, so it uses the built-in GITHUB_TOKEN.
       - uses: actions/setup-node@v7
+        if: ${{ !cancelled() }}
         with:
           node-version: 24.x
           registry-url: 'https://npm.pkg.github.com'
           scope: '@megapixel99'
 
       - name: Publish to GitHub Packages
+        if: ${{ !cancelled() }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -164,7 +189,19 @@ jobs:
           npm publish --registry=https://npm.pkg.github.com
           git checkout -- package.json
 
+      - name: Fail the run if npm did not publish
+        if: needs.check.outputs.npm_missing == 'true' && steps.npm_publish.outcome == 'failure'
+        run: |
+          echo "::error::npm publish failed. A 404 on PUT means npm rejected the credential."
+          echo "Trusted publishing requires a publisher configured on the npm side:"
+          echo "  npmjs.com -> cas-authentication-user -> Settings -> Publishing access"
+          echo "  -> add a GitHub Actions publisher for ${{ github.repository }}, workflow release.yml"
+          echo "The step above prints whether the OIDC token was available and whether an"
+          echo ".npmrc auth line was overriding it."
+          exit 1
+
       - name: Summary
+        if: ${{ !cancelled() }}
         run: |
           {
             echo "### Released v$VERSION"
