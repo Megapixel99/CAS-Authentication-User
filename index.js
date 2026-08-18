@@ -316,8 +316,17 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
  * rebuilds on the way back, and CAS would reject the ticket.
  */
 CASAuthentication.prototype._returnToFor = function (req) {
-  if (req.query && req.query.returnTo !== undefined) {
-    return encodeURI(req.query.returnTo);
+  const returnTo = req.query && req.query.returnTo;
+  // Only a usable string counts. Express's query parser yields an array for a
+  // repeated parameter and an object for a bracketed one, and an empty value has
+  // to fall back to the request path rather than redirect the client to nothing.
+  if (typeof returnTo === 'string' && returnTo !== '') {
+    try {
+      return encodeURI(returnTo);
+    } catch (err) {
+      // encodeURI rejects lone surrogates. Fall back rather than fail the request.
+      console.error(err);
+    }
   }
   return req.path || '/';
 };

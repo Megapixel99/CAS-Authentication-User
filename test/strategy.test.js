@@ -64,18 +64,28 @@ test('a request with no ticket is redirected to the CAS login', async () => {
   assert.strictEqual(target.searchParams.has('gateway'), false);
 });
 
-test('the service URL keeps non-ticket query parameters', async () => {
+test('the redirect service URL does not carry the page query string to CAS', async () => {
+  // Page parameters must not reach the CAS server or its access logs, and the
+  // core middleware does not send them either.
   const strategy = new Strategy({ ...BASE });
-  const outcome = await runStrategy(strategy, makeReq({ url: '/app?foo=bar' }));
+  const outcome = await runStrategy(strategy, makeReq({
+    url: '/reset?token=s3cret&q=cats', path: '/reset',
+  }));
   assert.strictEqual(new URL(outcome.location).searchParams.get('service'),
-    'https://app.example.edu/app?foo=bar');
+    'https://app.example.edu/reset');
 });
 
-test('the service URL strips only the ticket parameter', async () => {
-  const strategy = new Strategy({ ...BASE });
-  const outcome = await runStrategy(strategy, makeReq({ url: '/app?foo=bar&ticket=ST-1&baz=2', query: {} }));
-  assert.strictEqual(new URL(outcome.location).searchParams.get('service'),
-    'https://app.example.edu/app?foo=bar&baz=2');
+test('the core middleware and the strategy agree on the redirect service URL', async () => {
+  const cas = new CASAuthentication({ ...BASE });
+  const req = makeReq({ url: '/reset?token=s3cret', path: '/reset' });
+  const res = { redirects: [], redirect(l) { this.redirects.push(l); }, sendStatus() {} };
+  cas.bounce(req, res, () => {});
+  const coreService = new URL(res.redirects[0]).searchParams.get('service');
+
+  const outcome = await runStrategy(new Strategy({ cas }), makeReq({
+    url: '/reset?token=s3cret', path: '/reset',
+  }));
+  assert.strictEqual(new URL(outcome.location).searchParams.get('service'), coreService);
 });
 
 test('renew is carried through to the login redirect', async () => {

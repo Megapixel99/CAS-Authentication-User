@@ -48,9 +48,22 @@ function Strategy(options, verify) {
 }
 
 /**
- * The service URL a ticket is issued against. CAS requires the value sent to
- * /login and the value sent to the validation endpoint to match, so both go
- * through the core's reconstruction, which strips only the ticket parameter.
+ * The service URL to hand CAS when redirecting a client to log in.
+ *
+ * The request path only: the page's own query string is deliberately left out,
+ * matching what the core middleware sends, so page parameters are not handed to
+ * the CAS server or written to its access logs. Nothing is lost on the way
+ * back, because CAS returns only the service value it was given - which is what
+ * makes _serviceUrl below reproduce this exactly.
+ */
+Strategy.prototype._serviceForRedirect = function (req) {
+  return this.cas.service_url + (req.path || url.parse(req.url).pathname || '/');
+};
+
+/**
+ * The service URL to send when validating a ticket: whatever CAS returned the
+ * client to, minus the ticket. Reconstructed from the request rather than
+ * remembered in the session, so concurrent tabs cannot cross-contaminate.
  */
 Strategy.prototype._serviceUrl = function (req) {
   return this.cas._serviceForRequest(req);
@@ -84,10 +97,10 @@ Strategy.prototype._loginUrl = function (service, useGateway) {
  */
 Strategy.prototype.authenticate = function (req, options) {
   const opts = options || {};
-  const service = this._serviceUrl(req);
   const ticket = req.query && req.query.ticket;
 
   if (!ticket) {
+    const service = this._serviceForRedirect(req);
     if (!opts.gateway) {
       this.redirect(this._loginUrl(service, false));
       return;
@@ -106,7 +119,9 @@ Strategy.prototype.authenticate = function (req, options) {
     return;
   }
 
-  this.cas._validateTicket({ ticket, service, host: req.host }, (err, user, attributes) => {
+  this.cas._validateTicket({
+    ticket, service: this._serviceUrl(req), host: req.host,
+  }, (err, user, attributes) => {
     if (err) {
       // A gateway check must never block: the caller asked for a silent check,
       // so a rejected ticket means continuing unauthenticated.

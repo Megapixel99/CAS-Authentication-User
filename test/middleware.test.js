@@ -184,3 +184,59 @@ test('logout still redirects when session.destroy reports an error', () => {
   console.error = originalError;
   assert.deepStrictEqual(res.redirects, ['https://cas.example.edu/cas/logout']);
 });
+
+test('an empty returnTo falls back to the request path', () => {
+  // A bare `?returnTo=` must not produce an empty service URL or a redirect to
+  // nothing.
+  const req = makeReq({ query: { returnTo: '' }, path: '/app' });
+  const res = makeRes();
+  casOf().login(req, res, makeNext());
+  assert.strictEqual(req.session.cas_return_to, '/app');
+  assert.strictEqual(new URL(res.redirects[0]).searchParams.get('service'),
+    'https://app.example.edu/app');
+});
+
+test('a repeated returnTo falls back to the request path', () => {
+  // Express yields an array here, which is not a usable path.
+  const req = makeReq({ query: { returnTo: ['/a', '/b'] }, path: '/app' });
+  const res = makeRes();
+  casOf().login(req, res, makeNext());
+  assert.strictEqual(req.session.cas_return_to, '/app');
+});
+
+test('a bracketed returnTo falls back to the request path', () => {
+  // Express's extended query parser yields an object here.
+  const req = makeReq({ query: { returnTo: { x: '1' } }, path: '/app' });
+  const res = makeRes();
+  casOf().login(req, res, makeNext());
+  assert.strictEqual(req.session.cas_return_to, '/app');
+});
+
+test('a returnTo that cannot be encoded falls back rather than throwing', () => {
+  // encodeURI rejects lone surrogates.
+  const req = makeReq({ query: { returnTo: 'a\uD800b' }, path: '/app' });
+  const res = makeRes();
+  const originalError = console.error;
+  console.error = () => {};
+  assert.doesNotThrow(() => casOf().login(req, res, makeNext()));
+  console.error = originalError;
+  assert.strictEqual(req.session.cas_return_to, '/app');
+});
+
+test('a returnTo needing encoding is normalised to wire form', () => {
+  const req = makeReq({ query: { returnTo: '/my reports' }, path: '/app' });
+  const res = makeRes();
+  casOf().login(req, res, makeNext());
+  assert.strictEqual(req.session.cas_return_to, '/my%20reports');
+  assert.strictEqual(new URL(res.redirects[0]).searchParams.get('service'),
+    'https://app.example.edu/my%20reports');
+});
+
+test('the page query string is not sent to CAS', () => {
+  const req = makeReq({ url: '/reset?token=s3cret', path: '/reset' });
+  const res = makeRes();
+  casOf().bounce(req, res, makeNext());
+  const service = new URL(res.redirects[0]).searchParams.get('service');
+  assert.strictEqual(service, 'https://app.example.edu/reset');
+  assert.ok(!service.includes('s3cret'), 'page parameters must not reach the CAS server');
+});
