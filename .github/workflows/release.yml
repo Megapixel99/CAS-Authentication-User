@@ -113,24 +113,22 @@ jobs:
       # OIDC publishing landed in npm 11.5.1. Node 24 currently ships 11.17.0, so
       # this is usually a no-op, but setup-node resolves 24.x to whatever is
       # newest at the time and a release must not turn on that.
-      - name: npm must be new enough for trusted publishing
+      # Trusted publishing needs at least 11.5.1, but 11.17.0 cleared that floor and
+      # still failed with ENEEDAUTH, so take the newest npm rather than assuming the
+      # bundled one behaves. sql-nodejs's workflow upgrades unconditionally too.
+      - name: Use the newest npm
         if: needs.check.outputs.npm_missing == 'true'
         run: |
-          have="$(npm --version)"
-          if [ "$(printf '%s\n11.5.1\n' "$have" | sort -V | head -1)" != "11.5.1" ]; then
-            echo "npm $have predates trusted publishing; upgrading."
-            npm install -g npm@latest
-          else
-            echo "npm $have supports trusted publishing."
-          fi
-          npm --version
+          echo "bundled: $(npm --version)"
+          npm install -g npm@latest
+          echo "now:     $(npm --version)"
 
       - name: Publishing preconditions
         if: needs.check.outputs.npm_missing == 'true'
         run: |
           echo "npm:  $(npm --version)"
-          echo "OIDC request URL present:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}${ACTIONS_ID_TOKEN_REQUEST_URL:-NO (id-token: write missing)}"
-          echo "OIDC request token present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-NO}"
+          echo "OIDC request URL present:   ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
+          echo "OIDC request token present: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
           echo "registry: $(npm config get registry)"
           if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
             echo "userconfig $NPM_CONFIG_USERCONFIG contains (values redacted):"
@@ -139,6 +137,30 @@ jobs:
           else
             echo "no userconfig .npmrc, which is what trusted publishing wants."
           fi
+
+      # A trusted publisher is matched against the claims in this token. Printing
+      # them turns "npm says ENEEDAUTH" into a concrete comparison against what is
+      # registered on npmjs.com: a workflow filename that does not match, or a
+      # publisher pinned to an environment this job does not declare, both show up
+      # here. The token itself is never printed, only its claims.
+      - name: Show the OIDC claims npm will be matched on
+        if: needs.check.outputs.npm_missing == 'true'
+        run: |
+          curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
+            | node -e 'const fs=require("fs");fs.writeFileSync("/tmp/idt.json",fs.readFileSync(0,"utf8"))'
+          node -e '
+            const fs = require("fs");
+            const raw = JSON.parse(fs.readFileSync("/tmp/idt.json", "utf8"));
+            if (!raw.value) { console.log("no token returned:", JSON.stringify(raw).slice(0, 200)); process.exit(0); }
+            const claims = JSON.parse(Buffer.from(raw.value.split(".")[1], "base64url").toString());
+            for (const k of ["iss", "aud", "sub", "repository", "repository_owner",
+                             "workflow", "workflow_ref", "job_workflow_ref", "ref",
+                             "event_name", "environment", "runner_environment"]) {
+              console.log(`  ${k}: ${claims[k] === undefined ? "(absent)" : claims[k]}`);
+            }
+          '
+          rm -f /tmp/idt.json
 
       # No token. npm verifies the OIDC token minted by id-token: write against
       # the trusted publisher configured for this package, which has to name this
@@ -155,7 +177,9 @@ jobs:
         # The run still fails at the end; this only stops one registry's failure
         # from skipping the other.
         continue-on-error: true
-        run: npm publish
+        # Verbose so that npm's own account of the OIDC exchange, or its silence
+        # about attempting one, is on the record rather than inferred.
+        run: npm publish --loglevel verbose
 
       # GitHub Packages only accepts a package whose scope matches the repository
       # owner, and this package is published unscoped on npm. The name is
