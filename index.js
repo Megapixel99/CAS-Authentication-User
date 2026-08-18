@@ -12,7 +12,83 @@ const AUTH_TYPE = {
   BOUNCE: 0,
   BOUNCE_REDIRECT: 1,
   BLOCK: 2,
+  GATEWAY: 3,
 };
+
+/**
+ * Session key recording that a CAS gateway check has already been made, so that
+ * a client without a single sign-on session is not bounced to CAS on every
+ * request. Delete it to force a fresh gateway check.
+ * @type {string}
+ */
+const GATEWAY_SESSION_FLAG = 'cas_gateway_attempted';
+
+/**
+ * Query parameter added to the service URL of a gateway redirect. CAS echoes it
+ * back, which lets a gateway check terminate even for a client whose session
+ * does not persist between requests (cookies blocked, crawlers).
+ *
+ * Two consequences are deliberate, because CAS gives no other way to tell a
+ * gateway bounce-back apart from an ordinary request:
+ *
+ * - The marker only covers the return hop, so a client with no usable session
+ *   makes one CAS round trip per page view. That is bounded per request rather
+ *   than per client, and is the price of not looping forever.
+ * - Anyone can put the marker in a link, which suppresses the check for that
+ *   one request. Honouring it only when no session exists would reintroduce the
+ *   loop, since a session that never persists is indistinguishable from one
+ *   that does. The impact is one anonymous render: the pass-through
+ *   deliberately records nothing, so the next request checks again.
+ *
+ * @type {string}
+ */
+const GATEWAY_QUERY_PARAM = 'cas_gateway';
+
+/**
+ * The request URL as the client sent it, including any router mount prefix.
+ *
+ * Inside a mounted router (`app.use('/portal', router)`) both req.url and
+ * req.path are relative to the mount point, so building a service URL from them
+ * would hand CAS a path with the prefix missing - and CAS would return the
+ * client somewhere that does not exist. req.originalUrl keeps the prefix.
+ */
+function requestUrl(req) {
+  return req.originalUrl || req.url || '/';
+}
+
+/**
+ * The path portion of the request URL, mount prefix included.
+ */
+function requestPath(req) {
+  return url.parse(requestUrl(req)).pathname || req.path || '/';
+}
+
+/**
+ * Whether a client-supplied returnTo is a safe same-origin path.
+ *
+ * Anything that could carry the client to another origin is rejected: an
+ * absolute URL, a protocol-relative `//host` path, the `/\host` variant some
+ * browsers normalise to one, and schemes such as `javascript:`. Without this
+ * check an attacker can hand a user a link that logs them in through the real
+ * CAS server and then lands them on a site of the attacker's choosing, which is
+ * a ready-made credential-phishing flow.
+ */
+function isSafeReturnTo(value) {
+  if (typeof value !== 'string' || value === '') {
+    return false;
+  }
+  if (value.charAt(0) !== '/') {
+    return false;
+  }
+  return value.charAt(1) !== '/' && value.charAt(1) !== '\\';
+}
+
+/**
+ * Appends a query parameter to a URL that may already carry a query string.
+ */
+function appendQueryParam(target, param) {
+  return target + (target.indexOf('?') >= 0 ? '&' : '?') + param;
+}
 
 /**
  * @typedef {Object} CAS_options
@@ -26,6 +102,8 @@ const AUTH_TYPE = {
  * @property {string}  [session_name='cas_user']
  * @property {string}  [session_info=false]
  * @property {boolean} [destroy_session=false]
+ * @property {number}  [timeout=10000]
+ * @property {boolean} [regenerate_session=true]
  */
 
 /**
@@ -135,7 +213,11 @@ function CASAuthentication(options) {
   const parsed_cas_url = url.parse(this.cas_url);
   this.request_client = parsed_cas_url.protocol === 'http:' ? http : https;
   this.cas_host = parsed_cas_url.hostname;
-  this.cas_port = parsed_cas_url.protocol === 'http:' ? 80 : 443;
+  // Use an explicit port if cas_url carries one, and fall back to the default
+  // for the protocol otherwise.
+  this.cas_port = parsed_cas_url.port
+    ? Number(parsed_cas_url.port)
+    : (parsed_cas_url.protocol === 'http:' ? 80 : 443);
   this.cas_path = parsed_cas_url.pathname;
 
   this.service_url = options.service_url;
@@ -151,10 +233,24 @@ function CASAuthentication(options) {
     !== undefined ? options.session_info : false;
   this.destroy_session = options.destroy_session !== undefined ? !!options.destroy_session : false;
 
+  // Ticket validation is a server-to-server call, so a CAS server that accepts
+  // the connection and then never answers would otherwise hold the client's
+  // request open forever. 0 disables the timeout.
+  const timeout = options.timeout !== undefined ? Number(options.timeout) : 10000;
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error('CAS Authentication requires timeout to be a non-negative number.');
+  }
+  this.timeout = timeout;
+
+  this.regenerate_session = options.regenerate_session !== undefined
+    ? !!options.regenerate_session
+    : true;
+
   // Bind the prototype routing methods to this instance of CASAuthentication.
   this.bounce = this.bounce.bind(this);
   this.bounce_redirect = this.bounce_redirect.bind(this);
   this.block = this.block.bind(this);
+  this.gateway = this.gateway.bind(this);
   this.logout = this.logout.bind(this);
   this.login = this.login.bind(this);
 }
@@ -189,14 +285,36 @@ CASAuthentication.prototype.block = function (req, res, next) {
 };
 
 /**
+ * Performs a CAS gateway check. If the client already has a single sign-on
+ * session they are authenticated transparently; if they do not, the request
+ * continues unauthenticated instead of being shown a login form.
+ *
+ * A client with a working session is checked once - see GATEWAY_SESSION_FLAG
+ * and GATEWAY_QUERY_PARAM. A rejected ticket on this path continues
+ * unauthenticated rather than returning 401, since the client never asked to
+ * log in.
+ */
+CASAuthentication.prototype.gateway = function (req, res, next) {
+  // Handle the request with the gateway authorization type.
+  this._handle(req, res, next, AUTH_TYPE.GATEWAY);
+};
+
+/**
  * Handle a request with CAS authentication.
  */
 CASAuthentication.prototype._handle = function (req, res, next, authType) {
+  this._requireSession(req);
   // If the session has been validated with CAS, no action is required.
   if (req.session[this.session_name]) {
     // If this is a bounce redirect, redirect the authenticated user.
     if (authType === AUTH_TYPE.BOUNCE_REDIRECT) {
-      req.session.cas_return_to = req.query.returnTo || url.parse(req.url).path;
+      // A rejected returnTo falls back to where the client already is. The
+      // fallback keeps the query string, unlike the service URL sent to CAS,
+      // because this redirect stays inside the application.
+      const returnTo = req.query && req.query.returnTo;
+      req.session.cas_return_to = isSafeReturnTo(returnTo)
+        ? returnTo
+        : (url.parse(requestUrl(req)).path || requestPath(req));
       res.redirect(req.session.cas_return_to);
     }
     // Otherwise, allow them through to their request.
@@ -206,9 +324,12 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   }
   // If dev mode is active, set the CAS user to the specified dev user.
   else if (this.is_dev_mode) {
+    delete req.session[GATEWAY_SESSION_FLAG];
     req.session.userType = '';
     req.session[this.session_name] = this.dev_mode_user;
-    req.session[this.session_info] = this.dev_mode_info;
+    if (this.session_info) {
+      req.session[this.session_info] = this.dev_mode_info;
+    }
     next();
   }
   // If the authentication type is BLOCK, simply send a 401 response.
@@ -217,7 +338,28 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   }
   // If there is a CAS ticket in the query string, validate it with the CAS server.
   else if (req.query && req.query.ticket) {
-    this._handleTicket(req, res, next);
+    this._handleTicket(req, res, next, authType);
+  }
+  // In gateway mode, make a single silent check for an existing single sign-on
+  // session. Arriving here already marked means CAS sent the client back
+  // without a ticket, so no such session exists and the request should proceed
+  // unauthenticated rather than being bounced to a login form.
+  else if (authType === AUTH_TYPE.GATEWAY) {
+    if (this._gatewayAlreadyChecked(req)) {
+      // Leave the session untouched on the way through: the application may
+      // have stored its own state, userType included.
+      next();
+    } else {
+      // renew takes precedence over gateway, which means this redirect asks for
+      // a real login rather than a silent check. Recording it as a check done
+      // would make the route fall through unauthenticated ever after if the
+      // user abandoned the login form, so only record an actual gateway check.
+      if (!this.renew) {
+        req.session[GATEWAY_SESSION_FLAG] = true;
+      }
+      req.session.userType = '';
+      this._redirectToCas(req, res, true);
+    }
   }
   // Otherwise, redirect the user to the CAS login.
   else {
@@ -227,19 +369,102 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
 };
 
 /**
- * Redirects the client to the CAS login.
+ * The return path to hand CAS, in the form a browser will send it back in.
+ *
+ * req.path is already percent-encoded, but Express has decoded
+ * req.query.returnTo, so that one has to be re-encoded. Without this the
+ * service URL sent to /login would not match the one _serviceForRequest
+ * rebuilds on the way back, and CAS would reject the ticket.
  */
-CASAuthentication.prototype.login = function (req, res, next) {
+CASAuthentication.prototype._returnToFor = function (req) {
+  const returnTo = req.query && req.query.returnTo;
+  // Only a safe same-origin path counts. That rules out an off-site redirect,
+  // and also the array Express yields for a repeated parameter, the object it
+  // yields for a bracketed one, and an empty value that would otherwise redirect
+  // the client to nothing.
+  if (isSafeReturnTo(returnTo)) {
+    try {
+      return encodeURI(returnTo);
+    } catch (err) {
+      // encodeURI rejects lone surrogates. Fall back rather than fail the request.
+      console.error(err);
+    }
+  }
+  return requestPath(req);
+};
+
+/**
+ * Asserts that a session middleware is in place.
+ *
+ * Every entry point reads or writes the session, so this says so plainly rather
+ * than failing later with a TypeError about a property of undefined. Forgetting
+ * the session middleware is the most common way to misconfigure this library.
+ */
+CASAuthentication.prototype._requireSession = function (req) {
+  if (!req.session) {
+    throw new Error('CAS Authentication requires session support. Add express-session '
+      + '(or another middleware that populates req.session) before this middleware.');
+  }
+};
+
+/**
+ * Reports whether a gateway check has already been made for this client.
+ *
+ * The session flag is the primary record. The query marker is the fallback for
+ * clients whose session does not survive between requests, without which such a
+ * client would be redirected to CAS on every request forever.
+ */
+CASAuthentication.prototype._gatewayAlreadyChecked = function (req) {
+  if (req.session && req.session[GATEWAY_SESSION_FLAG]) {
+    return true;
+  }
+  return !!(req.query && req.query[GATEWAY_QUERY_PARAM]);
+};
+
+/**
+ * Rebuilds the service URL for a request arriving back from CAS.
+ *
+ * CAS honours a ticket only for the exact service value it was issued for, so
+ * this has to reproduce what _redirectToCas sent. CAS appends `ticket` to the
+ * service URL it was handed, so removing just that parameter - and preserving
+ * the remaining ones byte for byte, rather than re-encoding them - recovers the
+ * original value.
+ */
+CASAuthentication.prototype._serviceForRequest = function (req) {
+  const parsed = url.parse(requestUrl(req));
+  const search = (parsed.search || '').replace(/^\?/, '');
+  const kept = search.split('&')
+    .filter((pair) => pair !== '' && pair.split('=')[0] !== 'ticket');
+  return this.service_url + (parsed.pathname || requestPath(req))
+    + (kept.length ? `?${kept.join('&')}` : '');
+};
+
+/**
+ * Redirects the client to the CAS login, optionally as a gateway check.
+ *
+ * @param {boolean} useGateway Request ?gateway=true, so that CAS returns the
+ *   client immediately instead of presenting a login form when no single
+ *   sign-on session exists.
+ */
+CASAuthentication.prototype._redirectToCas = function (req, res, useGateway) {
+  this._requireSession(req);
   // Save the return URL in the session. If an explicit return URL is set as a
   // query parameter, use that. Otherwise, just use the URL from the request.
-  req.session.cas_return_to = req.query.returnTo || req.path || '/';
+  req.session.cas_return_to = this._returnToFor(req);
   // Set up the query parameters.
-  const query = {
-    service: this.service_url + req.session.cas_return_to,
-  };
+  let service = this.service_url + req.session.cas_return_to;
+  const query = {};
+  // The CAS protocol gives renew precedence when both are supplied, so there is
+  // no point sending gateway alongside it.
   if (this.renew) {
     query.renew = this.renew;
+  } else if (useGateway) {
+    query.gateway = true;
+    // Travels back on the service URL, so the check terminates even with no
+    // usable session. See _gatewayAlreadyChecked.
+    service = appendQueryParam(service, `${GATEWAY_QUERY_PARAM}=1`);
   }
+  query.service = service;
   // Redirect to the CAS login.
   res.redirect(this.cas_url + url.format({
     pathname: '/login',
@@ -248,9 +473,17 @@ CASAuthentication.prototype.login = function (req, res, next) {
 };
 
 /**
+ * Redirects the client to the CAS login.
+ */
+CASAuthentication.prototype.login = function (req, res, next) {
+  this._redirectToCas(req, res, false);
+};
+
+/**
  * Logout the currently logged in CAS user.
  */
 CASAuthentication.prototype.logout = function (req, res, next) {
+  this._requireSession(req);
   // Destroy the entire session if the option is set.
   if (this.destroy_session) {
     req.session.destroy((err) => {
@@ -265,6 +498,15 @@ CASAuthentication.prototype.logout = function (req, res, next) {
     if (this.session_info) {
       delete req.session[this.session_info];
     }
+    // Clear everything else this library writes. userType in particular is
+    // authorisation-relevant: leaving the previous user's value behind while
+    // their username is gone lets an application that reads it alone act on a
+    // stale privilege. Only needed on this branch - destroying the whole session
+    // takes all of it along, and express-session's destroy() removes req.session
+    // outright, so touching it afterwards would throw.
+    delete req.session[GATEWAY_SESSION_FLAG];
+    delete req.session.userType;
+    delete req.session.cas_return_to;
   }
 
   // Redirect the client to the CAS logout.
@@ -272,12 +514,36 @@ CASAuthentication.prototype.logout = function (req, res, next) {
 };
 
 /**
- * Handles the ticket generated by the CAS login requester and validates it with the CAS login acceptor.
+ * Validates a service ticket against the CAS server and reports back the
+ * authenticated username and attributes.
+ *
+ * This is the transport half of ticket handling, deliberately free of any
+ * req/res/session coupling so other front ends can reuse it - the Passport
+ * strategy in strategy.js wraps exactly this method.
+ *
+ * @param {Object}   params
+ * @param {string}   params.ticket  The service ticket issued by CAS.
+ * @param {string}   params.service The service URL the ticket was issued for.
+ * @param {string}   [params.host]  Host used to build the SAML 1.1 RequestID.
+ * @param {function(Error, string=, Object=)} callback
  */
-CASAuthentication.prototype._handleTicket = function (req, res, next) {
+CASAuthentication.prototype._validateTicket = function (params, callback) {
+  const { ticket, service } = params;
   const requestOptions = {
     host: this.cas_host,
     port: this.cas_port,
+  };
+  let post_data = null;
+
+  // Guard against the response erroring after it has already been parsed,
+  // which would otherwise call back twice.
+  let settled = false;
+  const done = (err, user, attributes) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    callback(err, user, attributes);
   };
 
   if (['1.0', '2.0', '3.0'].indexOf(this.cas_version) >= 0) {
@@ -285,21 +551,22 @@ CASAuthentication.prototype._handleTicket = function (req, res, next) {
     requestOptions.path = url.format({
       pathname: this.cas_path + this._validateUri,
       query: {
-        service: this.service_url + url.parse(req.url).pathname,
-        ticket: req.query.ticket,
+        service,
+        ticket,
       },
     });
   } else if (this.cas_version === 'saml1.1') {
     const now = new Date();
-    var post_data = `${'<?xml version="1.0" encoding="utf-8"?>\n'
+    const request_host = params.host || url.parse(service).hostname || 'localhost';
+    post_data = '<?xml version="1.0" encoding="utf-8"?>\n'
       + '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">\n'
       + '  <SOAP-ENV:Header/>\n'
       + '  <SOAP-ENV:Body>\n'
       + '    <samlp:Request xmlns:samlp="urn:oasis:names:tc:SAML:1.0:protocol" MajorVersion="1"\n'
-      + '      MinorVersion="1" RequestID="_'}${req.host}.${now.getTime()}"\n`
+      + `      MinorVersion="1" RequestID="_${request_host}.${now.getTime()}"\n`
       + `      IssueInstant="${now.toISOString()}">\n`
       + '      <samlp:AssertionArtifact>\n'
-      + `        ${req.query.ticket}\n`
+      + `        ${ticket}\n`
       + '      </samlp:AssertionArtifact>\n'
       + '    </samlp:Request>\n'
       + '  </SOAP-ENV:Body>\n'
@@ -309,7 +576,7 @@ CASAuthentication.prototype._handleTicket = function (req, res, next) {
     requestOptions.path = url.format({
       pathname: this.cas_path + this._validateUri,
       query: {
-        TARGET: this.service_url + url.parse(req.url).pathname,
+        TARGET: service,
         ticket: '',
       },
     });
@@ -327,31 +594,127 @@ CASAuthentication.prototype._handleTicket = function (req, res, next) {
       this._validate(body, (err, user, attributes) => {
         if (err) {
           console.error(err);
-          res.sendStatus(401);
-        } else {
-          req.session[this.session_name] = user;
-          if (this.session_info) {
-            req.session[this.session_info] = attributes || {};
-          }
-          res.redirect(req.session.cas_return_to);
+          done(err);
+          return;
         }
+        // CAS reported success without a usable username. Storing an empty
+        // string would leave the client looking unauthenticated on every later
+        // request, which loops between the application and CAS indefinitely.
+        if (user === undefined || user === null || String(user).trim() === '') {
+          const blank = new Error('CAS authentication succeeded without a username.');
+          console.error(blank);
+          done(blank);
+          return;
+        }
+        done(null, user, attributes);
       });
     });
     response.on('error', (err) => {
       console.error('Response error from CAS: ', err);
-      res.sendStatus(401);
+      done(err);
     });
   });
 
   request.on('error', (err) => {
     console.error('Request error with CAS: ', err);
-    res.sendStatus(401);
+    done(err);
   });
 
-  if (this.cas_version === 'saml1.1') {
+  if (this.timeout > 0) {
+    // setTimeout only reports socket inactivity; destroying the request is what
+    // turns that into an error the caller sees.
+    request.setTimeout(this.timeout, () => {
+      request.destroy(new Error(`CAS request timed out after ${this.timeout}ms.`));
+    });
+  }
+
+  if (post_data !== null) {
     request.write(post_data);
   }
   request.end();
 };
+
+/**
+ * Stores a validated CAS identity on the session, giving the client a fresh
+ * session id first.
+ *
+ * Regenerating defeats session fixation: without it, an attacker who can plant a
+ * session cookie on a victim before they log in still holds a valid handle on
+ * the authenticated session afterwards. express-session's regenerate() starts
+ * from an empty session, so application data is copied across - only the id
+ * changes.
+ *
+ * Falls back to storing in place when regeneration is switched off or the
+ * session middleware does not offer it.
+ */
+CASAuthentication.prototype._establishSession = function (req, user, attributes, callback) {
+  const store = () => {
+    delete req.session[GATEWAY_SESSION_FLAG];
+    req.session[this.session_name] = user;
+    if (this.session_info) {
+      req.session[this.session_info] = attributes || {};
+    }
+    callback();
+  };
+
+  if (!this.regenerate_session || !req.session || typeof req.session.regenerate !== 'function') {
+    store();
+    return;
+  }
+
+  const preserved = {};
+  Object.keys(req.session).forEach((key) => {
+    // The new session brings its own cookie; everything else is the
+    // application's and should survive.
+    if (key !== 'cookie') {
+      preserved[key] = req.session[key];
+    }
+  });
+
+  req.session.regenerate((err) => {
+    if (err) {
+      // The store failed to drop the old record. express-session has still
+      // handed us a fresh session, so carry on rather than failing the login.
+      console.error(err);
+    }
+    Object.assign(req.session, preserved);
+    store();
+  });
+};
+
+/**
+ * Handles the ticket generated by the CAS login requester and validates it with the CAS login acceptor.
+ */
+CASAuthentication.prototype._handleTicket = function (req, res, next, authType) {
+  this._validateTicket({
+    ticket: req.query.ticket,
+    service: this._serviceForRequest(req),
+    host: req.hostname || req.host,
+  }, (err, user, attributes) => {
+    if (err) {
+      // A gateway check must never block. The client did not ask to log in, so
+      // a rejected ticket means carrying on unauthenticated, not a 401.
+      if (authType === AUTH_TYPE.GATEWAY) {
+        next();
+      } else {
+        res.sendStatus(401);
+      }
+      return;
+    }
+    this._establishSession(req, user, attributes, () => {
+      // cas_return_to is missing if the session did not survive the round trip,
+      // or if the client arrived at a ticket URL directly. Redirecting to the
+      // current path still lands them in the right place, minus the spent ticket.
+      res.redirect(req.session.cas_return_to || requestPath(req));
+    });
+  });
+};
+
+CASAuthentication.prototype._requestPath = function (req) {
+  return requestPath(req);
+};
+
+CASAuthentication.GATEWAY_SESSION_FLAG = GATEWAY_SESSION_FLAG;
+CASAuthentication.GATEWAY_QUERY_PARAM = GATEWAY_QUERY_PARAM;
 
 module.exports = CASAuthentication;

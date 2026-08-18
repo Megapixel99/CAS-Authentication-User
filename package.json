@@ -13,8 +13,14 @@
   "deprecated": false,
   "description": "A CAS authentication library designed to be used as middleware for an Express server.",
   "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/express-session": "^1.19.0",
+    "@types/node": "^26.2.0",
+    "@types/passport": "^1.0.17",
     "express": "^4.21.0",
-    "express-session": "^1.18.2"
+    "express-session": "^1.18.2",
+    "passport": "^0.7.0",
+    "typescript": "^7.0.2"
   },
   "homepage": "https://github.com/Megapixel99/CAS-Authentication-User",
   "keywords": [
@@ -34,5 +40,24 @@
     "type": "git",
     "url": "git+https://github.com/Megapixel99/CAS-Authentication-User.git"
   },
-  "version": "0.2.4"
+  "version": "0.3.0",
+  "scripts": {
+    "test": "node --test test/*.test.js && npm run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "strategy.js",
+    "strategy.d.ts"
+  ],
+  "peerDependencies": {
+    "@types/express": "*"
+  },
+  "peerDependenciesMeta": {
+    "@types/express": {
+      "optional": true
+    }
+  }
 }

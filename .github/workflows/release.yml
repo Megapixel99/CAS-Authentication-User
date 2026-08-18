@@ -1,0 +1,177 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+    # A version bump always touches package.json, so this is a cheap pre-filter.
+    # The check job below still compares the version before anything is published.
+    paths: ['package.json']
+  # Lets a partially failed release be finished without another commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Has the version changed?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag_missing: ${{ steps.read.outputs.tag_missing }}
+      npm_missing: ${{ steps.read.outputs.npm_missing }}
+      release_needed: ${{ steps.read.outputs.release_needed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+
+      - name: Compare package.json against the tags and the registry
+        id: read
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          name="$(node -p 'require("./package.json").name')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+            tag_missing=false
+          else
+            tag_missing=true
+          fi
+          echo "tag_missing=$tag_missing" >> "$GITHUB_OUTPUT"
+
+          # `npm view` exits non-zero when that exact version is not published.
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            npm_missing=false
+          else
+            npm_missing=true
+          fi
+          echo "npm_missing=$npm_missing" >> "$GITHUB_OUTPUT"
+
+          if [ "$tag_missing" = false ] && [ "$npm_missing" = false ]; then
+            echo "release_needed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$name@$version is already tagged and published; nothing to do."
+          else
+            echo "release_needed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Releasing $name@$version (tag missing: $tag_missing, npm missing: $npm_missing)."
+          fi
+
+  release:
+    name: Release ${{ needs.check.outputs.version }}
+    needs: check
+    if: needs.check.outputs.release_needed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the tag and the GitHub release
+      packages: write   # publish to GitHub Packages
+      id-token: write   # mint the OIDC token npm trusted publishing verifies
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      # Publishing cannot be undone, so the suite gates it here rather than being
+      # left to the CI workflow on a different event.
+      - name: Tests must pass before anything is published
+        run: npm test
+
+      # Each publishing step is guarded by its own output from the check job, so a
+      # run that failed halfway can be repeated with workflow_dispatch and will
+      # only do what is still missing rather than failing on "already exists".
+      - name: Tag and create the GitHub release
+        if: needs.check.outputs.tag_missing == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --generate-notes \
+            --verify-tag
+
+      # OIDC publishing landed in npm 11.5.1. Node 24 currently ships 11.17.0, so
+      # this is usually a no-op, but setup-node resolves 24.x to whatever is
+      # newest at the time and a release must not turn on that.
+      - name: npm must be new enough for trusted publishing
+        if: needs.check.outputs.npm_missing == 'true'
+        run: |
+          have="$(npm --version)"
+          if [ "$(printf '%s\n11.5.1\n' "$have" | sort -V | head -1)" != "11.5.1" ]; then
+            echo "npm $have predates trusted publishing; upgrading."
+            npm install -g npm@latest
+          else
+            echo "npm $have supports trusted publishing."
+          fi
+          npm --version
+
+      # No token. npm verifies the OIDC token minted by id-token: write against
+      # the trusted publisher configured for this package, which has to name this
+      # repository and this workflow file (release.yml). Provenance attestations
+      # are generated automatically, so --provenance is not passed.
+      #
+      # If this step fails with an authentication error, the trusted publisher has
+      # not been set up yet: npmjs.com -> the package -> Settings -> Publishing
+      # access -> add a GitHub Actions publisher for Megapixel99/CAS-Authentication-User
+      # with workflow `release.yml`.
+      - name: Publish to npm via trusted publishing
+        if: needs.check.outputs.npm_missing == 'true'
+        run: npm publish
+
+      # GitHub Packages only accepts a package whose scope matches the repository
+      # owner, and this package is published unscoped on npm. The name is
+      # rewritten for that registry alone, in the runner's working copy, and
+      # restored afterwards, so the npm name is untouched. GitHub Packages has no
+      # OIDC equivalent, so it uses the built-in GITHUB_TOKEN.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@megapixel99'
+
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          scoped="@megapixel99/$(node -p 'require("./package.json").name')"
+          if npm view "$scoped@$VERSION" version \
+               --registry=https://npm.pkg.github.com > /dev/null 2>&1; then
+            echo "::notice::$scoped@$VERSION is already on GitHub Packages."
+            exit 0
+          fi
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = '$scoped';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish --registry=https://npm.pkg.github.com
+          git checkout -- package.json
+
+      - name: Summary
+        run: |
+          {
+            echo "### Released v$VERSION"
+            echo
+            echo "- tag and GitHub release: ${{ needs.check.outputs.tag_missing == 'true' && 'created' || 'already existed' }}"
+            echo "- npm: https://www.npmjs.com/package/cas-authentication-user/v/$VERSION"
+            echo "- GitHub Packages: \`@megapixel99/cas-authentication-user@$VERSION\`"
+            echo
+            echo "npm was published with trusted publishing (OIDC); no long-lived token is stored in this repository."
+          } >> "$GITHUB_STEP_SUMMARY"
