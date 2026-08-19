@@ -4,6 +4,8 @@
 
 Middleware and route handlers that authenticate an [Express](https://expressjs.com/) application against a [CAS](https://apereo.github.io/cas/development/protocol/CAS-Protocol.html) server.
 
+This package is a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1); see [Origins](#origins) for what came from there and what was added here.
+
 All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 202 tests across 12 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
@@ -303,6 +305,14 @@ Five changes affect behaviour an existing deployment may depend on.
 - Ticket validation gives up after 10 seconds by default (previously there was no timeout at all). Set `timeout: 0` to wait indefinitely as before.
 - The session identifier is regenerated on login. Set `regenerate_session: false` for the previous behaviour.
 - `cas_port` honours an explicit port in `cas_url` rather than always taking 80 or 443 from the protocol, so a CAS server on a non-standard port is now reached at the port it was configured with.
+
+## Origins
+
+This package began in 2019 as a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1), whose last release was 0.0.8 in November 2015. That library is MIT licensed and this one keeps the same license.
+
+What came from there is most of the shape this README describes. The `bounce`, `block`, `bounce_redirect` and `logout` entry points are theirs, as are their semantics and the choice to answer 401 from `block` rather than redirect. So are ten of the options in the table above (`cas_url`, `cas_version`, `service_url`, `renew`, `is_dev_mode`, `dev_mode_user`, `dev_mode_info`, `session_name`, `session_info` and `destroy_session`), the dev-mode design, and support for all four CAS protocol versions with their separate endpoints and response parsers. The structure that makes the rest of the code version-agnostic, resolving the endpoint and the parser together once in the constructor, is theirs too.
+
+Added here: gateway mode, the `login` endpoint, the Passport strategy, the TypeScript declarations, the test suite and CI, the `timeout` and `regenerate_session` options, and the 0.3.0 behaviour changes listed under [Upgrading to 0.3.0](#upgrading-to-030). Two of those are fixes to inherited behaviour rather than new features: the unvalidated `returnTo` redirect and the absence of session regeneration on login both came from upstream and were carried here until 0.3.0.
 
 ## License
 
