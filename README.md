@@ -10,6 +10,8 @@ All four protocol versions CAS defines are implemented, each with its own valida
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
+**Write-up:** [What Maintaining a Forked npm Package Actually Buys](https://sethwheeler.dev/blog/forked-package-semver/) — a caret below 1.0.0 walls off the published fix, so `npm audit` reports "No fix available"; what it could not see was the open redirect this fork shipped for seven years while auditing clean.
+
 ## Requirements
 
 A session middleware such as express-session has to be installed ahead of this middleware (ahead of it in the stack, not merely present in the project), since the authenticated username is kept on `req.session`. Every entry point checks for the session and throws an error naming express-session when it is absent, rather than failing several lines later on a property of `undefined`.
