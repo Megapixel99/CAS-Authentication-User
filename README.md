@@ -6,7 +6,7 @@ Middleware and route handlers that authenticate an [Express](https://expressjs.c
 
 This package is a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1); see [Origins](#origins) for what came from there and what was added here.
 
-All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 202 tests across 12 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
+All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 216 tests across 13 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
@@ -252,6 +252,12 @@ const groups = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : [];
 `bounce_redirect` and `login` both accept a `returnTo` query parameter naming where to send the client once they are authenticated. That value arrives from the client, so only a same-origin path is accepted: it has to begin with a single `/`. An absolute URL, a protocol-relative `//host` path, the `/\host` variant some browsers normalize into one, and a scheme such as `javascript:` are all refused, and the client goes to the path they requested instead.
 
 The restriction is not tidiness. Without it, an attacker could hand a victim a link that logs them in at the genuine CAS server and then lands them on a site of the attacker's choosing, which is a phishing flow with a real login in the middle of it. Versions before 0.3.0 redirected to whatever `returnTo` contained (which is why 0.3.0 is a minor bump rather than a patch).
+
+### The request path
+
+`returnTo` is not the only client-controlled value that decides where a redirect lands. The request path does too: `bounce_redirect` falls back to it when no `returnTo` is supplied, and it forms the service URL sent to CAS. A path is not automatically same-origin, because `//host` is protocol-relative and `/\host` is the variant browsers normalize into one.
+
+Request URLs are parsed with the WHATWG `URL` API against a base that cannot exist, and a path that resolves away from that base is replaced with `/`. Node's legacy `url.parse` reported both forms above as a *pathname*, so a client sent to `/\evil.example.com` on a `bounce_redirect` route was redirected off-site — with no CAS round trip involved, since an already authenticated client never reaches one. Node documents that parser as [DEP0169](https://nodejs.org/api/deprecations.html#DEP0169), noting that CVEs are not issued against it.
 
 ### Query strings and the login round trip
 

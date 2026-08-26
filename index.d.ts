@@ -14,8 +14,9 @@ declare class CASAuthentication {
   /** Hostname parsed out of `cas_url`. */
   readonly cas_host: string;
   /**
-   * Port used to reach the CAS server. Derived from the protocol of `cas_url`
-   * (80 for http, 443 for https); an explicit port in the URL is not used.
+   * Port used to reach the CAS server. An explicit port in `cas_url` is
+   * honoured; without one the port follows the protocol (80 for http, 443 for
+   * https).
    */
   readonly cas_port: number;
   /** Path parsed out of `cas_url`. */
@@ -184,6 +185,13 @@ declare namespace CASAuthentication {
    * check terminates even for a client whose session does not persist.
    */
   const GATEWAY_QUERY_PARAM: string;
+
+  /**
+   * Serialises query parameters the way the CAS service URL requires: a space
+   * as `%20` and `~!*()` left literal, matching what this library has always
+   * sent. Shared with the Passport strategy, which builds the same login URL.
+   */
+  function formatQuery(params: Record<string, string | number | boolean>): string;
 }
 
 export = CASAuthentication;
