@@ -1,5 +1,10 @@
 # CAS Authentication for Express
 
+[![npm version](https://img.shields.io/npm/v/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user)
+[![downloads](https://img.shields.io/npm/dm/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user)
+[![unpacked size](https://img.shields.io/npm/unpacked-size/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user?activeTab=code)
+[![node](https://img.shields.io/node/v/cas-authentication-user.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/cas-authentication-user.svg)](LICENSE)
 [![CI](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml/badge.svg)](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml)
 
 Middleware and route handlers that authenticate an [Express](https://expressjs.com/) application against a [CAS](https://apereo.github.io/cas/development/protocol/CAS-Protocol.html) server.
@@ -39,7 +44,9 @@ let cas = new CASAuthentication({
   session_info       : 'cas_userinfo',
   destroy_session    : false,
   timeout            : 10000,
-  regenerate_session : true
+  regenerate_session : true,
+  logger             : console,
+  manage_user_type   : true
 });
 ```
 
@@ -232,8 +239,10 @@ declare module 'express-session' {
     cas_user?: string;
     cas_userinfo?: CASAuthentication.CASAttributes;
     cas_return_to?: string;
-    userType?: string;
     cas_gateway_attempted?: boolean;
+    // Written by this library only while manage_user_type is on, which is
+    // deprecated; see The userType session key.
+    userType?: string;
   }
 }
 ```
@@ -357,6 +366,20 @@ That runs the suite on [Node's built-in test runner](https://nodejs.org/api/test
 
 CI runs both commands on Node 20, 22, 24 and 26. A second job covers what no test can: the `files` field decides what a consumer actually receives, so that job packs the tarball, installs it into an empty project with `--omit=dev`, and checks that both entry points load with xml2js as the only dependency present. Of those four versions only 22, 24 and 26 are still in support (Node 20 reached end of life on 2026-04-30); 20 is there because the institutions this package is aimed at upgrade slowly, and knowing it still works is worth a job.
 
+## Upgrading to 0.4.0
+
+One change affects behaviour, and it is a security fix.
+
+- **A request path that resolves to another origin no longer reaches `res.redirect`.** Request URLs are parsed with the WHATWG `URL` API rather than Node's deprecated `url.parse`, which reported `//host` and the `/\host` variant browsers normalize into it as a *pathname*. A client sent to `/\evil.example.com` on a `bounce_redirect` route was redirected off-site; such a path now resolves to `/`. This is a different input from the `returnTo` redirect fixed in 0.3.0 — `returnTo` was validated, the request path was not — and it needed no CAS round trip, since an already authenticated client is redirected before one happens. See [The request path](#the-request-path).
+
+Nothing else is a breaking change. Three additions are worth knowing about:
+
+- `logger` sends this library's diagnostics wherever the application's own logs go. Defaults to `console`, as before. See [Diagnostics](#diagnostics).
+- `validateTicket` is ticket validation as a promise. The callback form is unchanged. See [Validating a ticket on your own](#validating-a-ticket-on-your-own).
+- `manage_user_type: false` stops this library from writing `req.session.userType`. Managing that key is deprecated and the opt-out becomes the only behaviour in 1.0. See [The userType session key](#the-usertype-session-key).
+
+`engines` now declares Node >= 20, matching the versions CI covers. npm reports this as a warning rather than refusing to install.
+
 ## Upgrading to 0.3.0
 
 Five changes affect behaviour an existing deployment may depend on.
@@ -373,7 +396,9 @@ This package began in 2019 as a fork of [cas-authentication](https://github.com/
 
 What came from there is most of the shape this README describes. The `bounce`, `block`, `bounce_redirect` and `logout` entry points are theirs, as are their semantics and the choice to answer 401 from `block` rather than redirect. So are ten of the options in the table above (`cas_url`, `cas_version`, `service_url`, `renew`, `is_dev_mode`, `dev_mode_user`, `dev_mode_info`, `session_name`, `session_info` and `destroy_session`), the dev-mode design, and support for all four CAS protocol versions with their separate endpoints and response parsers. The structure that makes the rest of the code version-agnostic, resolving the endpoint and the parser together once in the constructor, is theirs too.
 
-Added here: gateway mode, the `login` endpoint, the Passport strategy, the TypeScript declarations, the test suite and CI, the `timeout` and `regenerate_session` options, and the 0.3.0 behaviour changes listed under [Upgrading to 0.3.0](#upgrading-to-030). Two of those are fixes to inherited behaviour rather than new features: the unvalidated `returnTo` redirect and the absence of session regeneration on login both came from upstream and were carried here until 0.3.0.
+Added here: gateway mode, the `login` endpoint, the Passport strategy, the TypeScript declarations, the test suite and CI, the `timeout`, `regenerate_session`, `logger` and `manage_user_type` options, the promise form of ticket validation, and the behaviour changes listed under [Upgrading to 0.3.0](#upgrading-to-030) and [Upgrading to 0.4.0](#upgrading-to-040).
+
+Three of those are fixes to inherited behaviour rather than new features. The unvalidated `returnTo` redirect and the absence of session regeneration on login both came from upstream and were carried here until 0.3.0. The second open redirect, through the request path rather than `returnTo`, was carried until 0.4.0. `userType` is inherited too, and is on its way out for the opposite reason: it is not a defect, just a key this library has no business writing into an application's session.
 
 ## License
 
