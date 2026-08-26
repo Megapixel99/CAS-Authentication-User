@@ -1,12 +1,17 @@
 # CAS Authentication for Express
 
+[![npm version](https://img.shields.io/npm/v/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user)
+[![downloads](https://img.shields.io/npm/dm/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user)
+[![unpacked size](https://img.shields.io/npm/unpacked-size/cas-authentication-user.svg)](https://www.npmjs.com/package/cas-authentication-user?activeTab=code)
+[![node](https://img.shields.io/node/v/cas-authentication-user.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/cas-authentication-user.svg)](LICENSE)
 [![CI](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml/badge.svg)](https://github.com/Megapixel99/CAS-Authentication-User/actions/workflows/ci.yml)
 
 Middleware and route handlers that authenticate an [Express](https://expressjs.com/) application against a [CAS](https://apereo.github.io/cas/development/protocol/CAS-Protocol.html) server.
 
 This package is a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1); see [Origins](#origins) for what came from there and what was added here.
 
-All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 216 tests across 13 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
+All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 242 tests across 16 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
@@ -39,7 +44,9 @@ let cas = new CASAuthentication({
   session_info       : 'cas_userinfo',
   destroy_session    : false,
   timeout            : 10000,
-  regenerate_session : true
+  regenerate_session : true,
+  logger             : console,
+  manage_user_type   : true
 });
 ```
 
@@ -59,6 +66,8 @@ let cas = new CASAuthentication({
 | destroy_session | _boolean_ | If true, `logout` destroys the whole session; otherwise it deletes only the keys this library writes. | _false_ |
 | timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely, since `http.request` applies no timeout of its own. 0 waits forever. | _10000_ |
 | regenerate_session | _boolean_ | If true, the session identifier is regenerated when a client authenticates, so a session fixed by an attacker beforehand does not carry over. Data already in the session is preserved; only the identifier changes. | _true_ |
+| logger | _object_ | Where diagnostics are reported. Any object with an `error(...args)` method, which `console` and the common logging libraries all satisfy. See [Diagnostics](#diagnostics). | _console_ |
+| manage_user_type | _boolean_ | Whether this library writes and clears `req.session.userType`. Deprecated; see [The userType session key](#the-usertype-session-key). | _true_ |
 
 ## Usage
 
@@ -95,7 +104,7 @@ app.get('/api/user', cas.block, ( req, res ) => {
 });
 
 // userType starts as an empty string; populating it from your own records is
-// left to the application.
+// left to the application. Deprecated - see The userType session key.
 app.get('/api/user-type', cas.block, ( req, res ) => {
   res.json({ cas_user_type: req.session.userType });
 });
@@ -230,8 +239,10 @@ declare module 'express-session' {
     cas_user?: string;
     cas_userinfo?: CASAuthentication.CASAttributes;
     cas_return_to?: string;
-    userType?: string;
     cas_gateway_attempted?: boolean;
+    // Written by this library only while manage_user_type is on, which is
+    // deprecated; see The userType session key.
+    userType?: string;
   }
 }
 ```
@@ -282,6 +293,57 @@ app.use('/portal', router);
 
 Set `service_url` to the application's origin and leave the mount prefix out of it. Versions before 0.3.0 built the service URL from the mount-relative path, which sent CAS a path with the prefix missing; if that was compensated for by putting the prefix into `service_url`, remove it.
 
+### The userType session key
+
+`req.session.userType` is not part of the CAS protocol, and nothing in this library reads it. The library blanks it on every unauthenticated pass and deletes it on logout; populating it is left to the application. That is a library reaching into an application's own session state, and it is deprecated.
+
+```javascript
+let cas = new CASAuthentication({
+  cas_url: 'https://my-cas-host.com/cas',
+  service_url: 'https://my-service-host.com',
+  manage_user_type: false     // the only behaviour in 1.0
+});
+```
+
+The blanking is not pointless, which is why the field cannot simply stop being touched. `userType` is what applications tend to authorise on, so a value left over from the previous user, sitting beside a username that has been cleared, invites acting on a privilege that is no longer held. **An application that opts out takes that on:** clear the key on logout, or set `destroy_session: true` and let the whole session go. `CASAuthentication.USER_TYPE_SESSION_KEY` is exported so the same key can be used.
+
+The default stays `true` until 1.0, so nothing changes for an existing deployment that has not asked for it.
+
+### Validating a ticket on your own
+
+`validateTicket` is ticket validation with no request, no session and no callback — the protocol selection, the HTTP call and the XML parsing, and nothing else. It is what the Passport strategy is built on, and what to build on for any other front end:
+
+```javascript
+const { user, attributes } = await cas.validateTicket({
+  ticket: req.query.ticket,
+  service: 'https://my-service-host.com/callback'
+});
+```
+
+The `service` value has to be the exact string the ticket was issued for, or CAS will reject it. A failed validation rejects rather than resolving with an empty user, so it cannot be missed by forgetting to check.
+
+The older callback form remains, and now also returns a promise when called without a callback:
+
+```javascript
+cas._validateTicket({ ticket, service }, (err, user, attributes) => { /* ... */ });
+```
+
+### Diagnostics
+
+Nothing this library reports is thrown. A ticket CAS rejects, a CAS server that cannot be reached, a session store that fails to regenerate — each of these is a condition the request has already recovered from by the time it is reported, so raising it would turn a handled case into an unhandled one. They are written to `logger.error` instead.
+
+The consequence is that with the default `console` these lines land on stderr, separate from wherever the application's own logs go, and in a container they are easy to lose. Pass a `logger` to put them in the same place as everything else:
+
+```javascript
+let cas = new CASAuthentication({
+  cas_url: 'https://my-cas-host.com/cas',
+  service_url: 'https://my-service-host.com',
+  logger: pino({ name: 'cas' })   // or bunyan, winston, or your own { error() }
+});
+```
+
+Any object with an `error(...args)` method will do. The constructor throws if it is given anything else, since a logger that silently fails to log is worse than none.
+
 ### Validation failures
 
 A ticket CAS rejects, a CAS server that cannot be reached, one that times out, and one that reports success without a username are treated alike: `bounce` and `block` answer 401, and `gateway` continues unauthenticated.
@@ -292,7 +354,7 @@ The last of those matters more than it looks. An empty username would be stored 
 
 The session identifier is regenerated when a client authenticates. Without that, an attacker able to plant a session cookie on a victim before they log in would still hold a valid handle on the authenticated session afterwards (session fixation). Anything the application had already put in the session is copied across, so only the identifier changes. Setting `regenerate_session: false` switches the behaviour off.
 
-`logout` removes every session key this library writes: the CAS username, the CAS attributes, `cas_return_to`, `userType`, and the gateway flag. `userType` is the one that matters most, since it is what applications tend to authorise on, and leaving the previous user's value behind while their username is gone invites acting on a privilege that is no longer held. With `destroy_session: true` the whole session goes instead.
+`logout` removes every session key this library writes: the CAS username, the CAS attributes, `cas_return_to`, the gateway flag, and — while `manage_user_type` is on — `userType`. That last one matters most, since it is what applications tend to authorise on, and leaving the previous user's value behind while their username is gone invites acting on a privilege that is no longer held; an application that has [opted out](#the-usertype-session-key) clears it itself. With `destroy_session: true` the whole session goes instead.
 
 ## Tests
 
@@ -303,6 +365,20 @@ $ npm test
 That runs the suite on [Node's built-in test runner](https://nodejs.org/api/test.html) and then type-checks the declarations against a file written the way a consumer would write one. No CAS server is needed, since the tests stand up a local HTTP server that answers as one; `test/session-integration.test.js` and `test/passport-integration.test.js` go further and drive the middleware through real Express, real express-session and real Passport over real HTTP (no doubles for any of the three), which is what catches the class of bug a hand-written session double hides.
 
 CI runs both commands on Node 20, 22, 24 and 26. A second job covers what no test can: the `files` field decides what a consumer actually receives, so that job packs the tarball, installs it into an empty project with `--omit=dev`, and checks that both entry points load with xml2js as the only dependency present. Of those four versions only 22, 24 and 26 are still in support (Node 20 reached end of life on 2026-04-30); 20 is there because the institutions this package is aimed at upgrade slowly, and knowing it still works is worth a job.
+
+## Upgrading to 0.4.0
+
+One change affects behaviour, and it is a security fix.
+
+- **A request path that resolves to another origin no longer reaches `res.redirect`.** Request URLs are parsed with the WHATWG `URL` API rather than Node's deprecated `url.parse`, which reported `//host` and the `/\host` variant browsers normalize into it as a *pathname*. A client sent to `/\evil.example.com` on a `bounce_redirect` route was redirected off-site; such a path now resolves to `/`. This is a different input from the `returnTo` redirect fixed in 0.3.0 — `returnTo` was validated, the request path was not — and it needed no CAS round trip, since an already authenticated client is redirected before one happens. See [The request path](#the-request-path).
+
+Nothing else is a breaking change. Three additions are worth knowing about:
+
+- `logger` sends this library's diagnostics wherever the application's own logs go. Defaults to `console`, as before. See [Diagnostics](#diagnostics).
+- `validateTicket` is ticket validation as a promise. The callback form is unchanged. See [Validating a ticket on your own](#validating-a-ticket-on-your-own).
+- `manage_user_type: false` stops this library from writing `req.session.userType`. Managing that key is deprecated and the opt-out becomes the only behaviour in 1.0. See [The userType session key](#the-usertype-session-key).
+
+`engines` now declares Node >= 20, matching the versions CI covers. npm reports this as a warning rather than refusing to install.
 
 ## Upgrading to 0.3.0
 
@@ -320,7 +396,9 @@ This package began in 2019 as a fork of [cas-authentication](https://github.com/
 
 What came from there is most of the shape this README describes. The `bounce`, `block`, `bounce_redirect` and `logout` entry points are theirs, as are their semantics and the choice to answer 401 from `block` rather than redirect. So are ten of the options in the table above (`cas_url`, `cas_version`, `service_url`, `renew`, `is_dev_mode`, `dev_mode_user`, `dev_mode_info`, `session_name`, `session_info` and `destroy_session`), the dev-mode design, and support for all four CAS protocol versions with their separate endpoints and response parsers. The structure that makes the rest of the code version-agnostic, resolving the endpoint and the parser together once in the constructor, is theirs too.
 
-Added here: gateway mode, the `login` endpoint, the Passport strategy, the TypeScript declarations, the test suite and CI, the `timeout` and `regenerate_session` options, and the 0.3.0 behaviour changes listed under [Upgrading to 0.3.0](#upgrading-to-030). Two of those are fixes to inherited behaviour rather than new features: the unvalidated `returnTo` redirect and the absence of session regeneration on login both came from upstream and were carried here until 0.3.0.
+Added here: gateway mode, the `login` endpoint, the Passport strategy, the TypeScript declarations, the test suite and CI, the `timeout`, `regenerate_session`, `logger` and `manage_user_type` options, the promise form of ticket validation, and the behaviour changes listed under [Upgrading to 0.3.0](#upgrading-to-030) and [Upgrading to 0.4.0](#upgrading-to-040).
+
+Three of those are fixes to inherited behaviour rather than new features. The unvalidated `returnTo` redirect and the absence of session regeneration on login both came from upstream and were carried here until 0.3.0. The second open redirect, through the request path rather than `returnTo`, was carried until 0.4.0. `userType` is inherited too, and is on its way out for the opposite reason: it is not a defect, just a key this library has no business writing into an application's session.
 
 ## License
 

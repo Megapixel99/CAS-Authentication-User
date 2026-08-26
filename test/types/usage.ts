@@ -154,6 +154,43 @@ new CASAuthentication();
 // @ts-expect-error the verify callback must be a function
 new CasStrategy({ cas }, 'nope');
 
+// A logger is anything with an error method; console and pino-shaped loggers
+// both satisfy it.
+const consoleLogged = new CASAuthentication({ cas_url: 'x', service_url: 'y', logger: console });
+const customLogged = new CASAuthentication({
+  cas_url: 'x',
+  service_url: 'y',
+  logger: { error: (...args: unknown[]) => void args },
+});
+const loggerBack: CASAuthentication.Logger = customLogged.logger;
+
+// @ts-expect-error a logger has to provide error()
+new CASAuthentication({ cas_url: 'x', service_url: 'y', logger: { warn: () => {} } });
+
+// Ticket validation has a promise form and a callback form.
+async function validates() {
+  const { user, attributes } = await cas.validateTicket({ ticket: 't', service: 's' });
+  const promised: Promise<CASAuthentication.ValidatedTicket> = cas._validateTicket({ ticket: 't', service: 's' });
+  cas._validateTicket({ ticket: 't', service: 's' }, (err, u) => void [err, u]);
+  return [user, attributes, promised] as const;
+}
+
+const ownsUserType = new CASAuthentication({
+  cas_url: 'x', service_url: 'y', manage_user_type: false,
+});
+const userTypeKey: string = CASAuthentication.USER_TYPE_SESSION_KEY;
+
+// @ts-expect-error manage_user_type is a boolean
+new CASAuthentication({ cas_url: 'x', service_url: 'y', manage_user_type: 'no' });
+
+declare const validated: CASAuthentication.ValidatedTicket;
+
+// attributes is never undefined on a resolved validation, so no guard is needed.
+const attrValue: CASAuthentication.CASAttributeValue = validated.attributes.displayname;
+
+// @ts-expect-error a resolved validation carries a string user, not a boolean
+const userIsNotBoolean: boolean = validated.user;
+
 declare const someAttributes: CASAuthentication.CASAttributes;
 
 // @ts-expect-error an attribute value is not necessarily a string
@@ -164,3 +201,5 @@ someAttributes.address.toUpperCase();
 
 void minimal; void version; void port; void info; void strategyName; void client; void app;
 void marker; void notAString; void timeout; void regenerates;
+void consoleLogged; void loggerBack; void validates; void attrValue; void userIsNotBoolean;
+void ownsUserType; void userTypeKey;

@@ -169,6 +169,24 @@ function appendQueryParam(target, param) {
 }
 
 /**
+ * Session key this library writes but does not own.
+ *
+ * userType is not part of the CAS protocol and nothing here ever reads it: the
+ * library blanks it on every unauthenticated pass and clears it on logout, and
+ * leaves the application to populate it. That is a library reaching into an
+ * application's own session state, and it is deprecated - set
+ * `manage_user_type: false` to take ownership of the field, which will become
+ * the only behaviour in 1.0.
+ *
+ * The blanking is not pointless, which is why it cannot simply be dropped: the
+ * field is what applications tend to authorise on, so a stale value left beside
+ * a cleared username invites acting on a privilege that is no longer held. An
+ * application that opts out takes on clearing it, or uses destroy_session.
+ * @type {string}
+ */
+const USER_TYPE_SESSION_KEY = 'userType';
+
+/**
  * @typedef {Object} CAS_options
  * @property {string}  cas_url
  * @property {string}  service_url
@@ -235,7 +253,7 @@ function CASAuthentication(options) {
           }
           return callback(new Error('CAS authentication failed.'));
         } catch (err) {
-          console.error(err);
+          this.logger.error('CAS response could not be read: ', err);
           return callback(new Error('CAS authentication failed.'));
         }
       });
@@ -278,7 +296,7 @@ function CASAuthentication(options) {
           return callback(null, samlResponse.assertion.authenticationstatement.subject.nameidentifier,
             attributes);
         } catch (err) {
-          console.error(err);
+          this.logger.error('CAS response could not be read: ', err);
           return callback(new Error('CAS authentication failed.'));
         }
       });
@@ -333,7 +351,23 @@ function CASAuthentication(options) {
     ? !!options.regenerate_session
     : true;
 
+  // Everything this library reports is a diagnostic, never a thrown error, so
+  // without somewhere to send it a failed validation is invisible. console is
+  // the default because it always exists; an application with real logging
+  // passes its own and gets these lines in the same place as the rest.
+  // Deprecated, and default true only so that an existing deployment reading
+  // req.session.userType keeps working. See _resetUserType.
+  this.manage_user_type = options.manage_user_type !== undefined
+    ? !!options.manage_user_type
+    : true;
+
+  this.logger = options.logger !== undefined ? options.logger : console;
+  if (!this.logger || typeof this.logger.error !== 'function') {
+    throw new Error('CAS Authentication requires logger to be an object with an error method.');
+  }
+
   // Bind the prototype routing methods to this instance of CASAuthentication.
+  this.validateTicket = this.validateTicket.bind(this);
   this.bounce = this.bounce.bind(this);
   this.bounce_redirect = this.bounce_redirect.bind(this);
   this.block = this.block.bind(this);
@@ -412,7 +446,7 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   // If dev mode is active, set the CAS user to the specified dev user.
   else if (this.is_dev_mode) {
     delete req.session[GATEWAY_SESSION_FLAG];
-    req.session.userType = '';
+    this._resetUserType(req);
     req.session[this.session_name] = this.dev_mode_user;
     if (this.session_info) {
       req.session[this.session_info] = this.dev_mode_info;
@@ -444,13 +478,13 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
       if (!this.renew) {
         req.session[GATEWAY_SESSION_FLAG] = true;
       }
-      req.session.userType = '';
+      this._resetUserType(req);
       this._redirectToCas(req, res, true);
     }
   }
   // Otherwise, redirect the user to the CAS login.
   else {
-    req.session.userType = '';
+    this._resetUserType(req);
     this.login(req, res, next);
   }
 };
@@ -474,7 +508,7 @@ CASAuthentication.prototype._returnToFor = function (req) {
       return encodeURI(returnTo);
     } catch (err) {
       // encodeURI rejects lone surrogates. Fall back rather than fail the request.
-      console.error(err);
+      this.logger.error('returnTo could not be encoded, falling back to the request path: ', err);
     }
   }
   return requestPath(req);
@@ -487,6 +521,12 @@ CASAuthentication.prototype._returnToFor = function (req) {
  * than failing later with a TypeError about a property of undefined. Forgetting
  * the session middleware is the most common way to misconfigure this library.
  */
+CASAuthentication.prototype._resetUserType = function (req) {
+  if (this.manage_user_type) {
+    req.session[USER_TYPE_SESSION_KEY] = '';
+  }
+};
+
 CASAuthentication.prototype._requireSession = function (req) {
   if (!req.session) {
     throw new Error('CAS Authentication requires session support. Add express-session '
@@ -575,7 +615,7 @@ CASAuthentication.prototype.logout = function (req, res, next) {
   if (this.destroy_session) {
     req.session.destroy((err) => {
       if (err) {
-        console.error(err);
+        this.logger.error('Session store failed to destroy the session on logout: ', err);
       }
     });
   }
@@ -585,15 +625,19 @@ CASAuthentication.prototype.logout = function (req, res, next) {
     if (this.session_info) {
       delete req.session[this.session_info];
     }
-    // Clear everything else this library writes. userType in particular is
-    // authorisation-relevant: leaving the previous user's value behind while
-    // their username is gone lets an application that reads it alone act on a
-    // stale privilege. Only needed on this branch - destroying the whole session
-    // takes all of it along, and express-session's destroy() removes req.session
-    // outright, so touching it afterwards would throw.
+    // Clear everything else this library writes. Only needed on this branch -
+    // destroying the whole session takes all of it along, and express-session's
+    // destroy() removes req.session outright, so touching it afterwards would
+    // throw.
     delete req.session[GATEWAY_SESSION_FLAG];
-    delete req.session.userType;
     delete req.session.cas_return_to;
+    // userType is authorisation-relevant: leaving the previous user's value
+    // behind while their username is gone lets an application that reads it
+    // alone act on a stale privilege. An application that has opted out of
+    // userType clears it itself, or sets destroy_session.
+    if (this.manage_user_type) {
+      delete req.session[USER_TYPE_SESSION_KEY];
+    }
   }
 
   // Redirect the client to the CAS logout.
@@ -608,13 +652,26 @@ CASAuthentication.prototype.logout = function (req, res, next) {
  * req/res/session coupling so other front ends can reuse it - the Passport
  * strategy in strategy.js wraps exactly this method.
  *
+ * Called with a callback it reports through that. Called without one it
+ * returns a promise, which is the form to prefer in new code - see
+ * validateTicket below.
+ *
  * @param {Object}   params
  * @param {string}   params.ticket  The service ticket issued by CAS.
  * @param {string}   params.service The service URL the ticket was issued for.
  * @param {string}   [params.host]  Host used to build the SAML 1.1 RequestID.
- * @param {function(Error, string=, Object=)} callback
+ * @param {function(Error, string=, Object=)} [callback]
+ * @returns {Promise<{user: string, attributes: Object}>|undefined}
  */
 CASAuthentication.prototype._validateTicket = function (params, callback) {
+  if (callback === undefined) {
+    return this.validateTicket(params);
+  }
+  if (typeof callback !== 'function') {
+    // Otherwise this surfaces as a TypeError from inside the response handler,
+    // long after the call that caused it.
+    throw new Error('CAS Authentication was given a _validateTicket callback that is not a function.');
+  }
   const { ticket, service } = params;
   const requestOptions = {
     host: this.cas_host,
@@ -668,7 +725,7 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
     response.on('end', () => {
       this._validate(body, (err, user, attributes) => {
         if (err) {
-          console.error(err);
+          this.logger.error('CAS rejected the ticket: ', err);
           done(err);
           return;
         }
@@ -677,7 +734,7 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
         // request, which loops between the application and CAS indefinitely.
         if (user === undefined || user === null || String(user).trim() === '') {
           const blank = new Error('CAS authentication succeeded without a username.');
-          console.error(blank);
+          this.logger.error(blank);
           done(blank);
           return;
         }
@@ -685,13 +742,13 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       });
     });
     response.on('error', (err) => {
-      console.error('Response error from CAS: ', err);
+      this.logger.error('Response error from CAS: ', err);
       done(err);
     });
   });
 
   request.on('error', (err) => {
-    console.error('Request error with CAS: ', err);
+    this.logger.error('Request error with CAS: ', err);
     done(err);
   });
 
@@ -707,6 +764,34 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
     request.write(post_data);
   }
   request.end();
+  return undefined;
+};
+
+/**
+ * Validates a service ticket against the CAS server and resolves with the
+ * authenticated identity.
+ *
+ * The promise-returning form of _validateTicket, and the one to prefer: it is
+ * the whole public surface of ticket validation without a request, a session or
+ * a callback, which is what an alternative front end needs. Rejects with the
+ * validation error rather than resolving with a falsy user, so a failure cannot
+ * be missed by forgetting to check.
+ *
+ * @param {Object} params As _validateTicket.
+ * @returns {Promise<{user: string, attributes: Object}>}
+ */
+CASAuthentication.prototype.validateTicket = function (params) {
+  return new Promise((resolve, reject) => {
+    this._validateTicket(params, (err, user, attributes) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      // Normalised to {} so a caller can read an attribute without guarding
+      // first; CAS 1.0 never supplies attributes at all.
+      resolve({ user, attributes: attributes || {} });
+    });
+  });
 };
 
 /**
@@ -750,7 +835,7 @@ CASAuthentication.prototype._establishSession = function (req, user, attributes,
     if (err) {
       // The store failed to drop the old record. express-session has still
       // handed us a fresh session, so carry on rather than failing the login.
-      console.error(err);
+      this.logger.error('Session store failed to regenerate the session on login: ', err);
     }
     Object.assign(req.session, preserved);
     store();
@@ -791,6 +876,7 @@ CASAuthentication.prototype._requestPath = function (req) {
 
 // Shared with the Passport strategy, which builds the same login URL.
 CASAuthentication.formatQuery = formatQuery;
+CASAuthentication.USER_TYPE_SESSION_KEY = USER_TYPE_SESSION_KEY;
 CASAuthentication.GATEWAY_SESSION_FLAG = GATEWAY_SESSION_FLAG;
 CASAuthentication.GATEWAY_QUERY_PARAM = GATEWAY_QUERY_PARAM;
 

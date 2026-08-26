@@ -132,6 +132,29 @@ function runStrategy(strategy, req, options) {
   });
 }
 
+/**
+ * A logger double that records what the library reports, so a test can assert
+ * on a diagnostic rather than swallowing it. Passed as the `logger` option.
+ */
+function collectingLogger() {
+  const calls = [];
+  return {
+    calls,
+    error: (...args) => { calls.push(args); },
+    // The first argument is the only part a test wants to match on; the rest is
+    // the Error itself.
+    messages: () => calls.map((args) => (args[0] instanceof Error ? args[0].message : args[0])),
+  };
+}
+
 module.exports = {
-  makeReq, makeRes, makeNext, startCasServer, casFor, silenceErrors, runStrategy, CASAuthentication,
+  makeReq,
+  makeRes,
+  makeNext,
+  startCasServer,
+  casFor,
+  silenceErrors,
+  collectingLogger,
+  runStrategy,
+  CASAuthentication,
 };

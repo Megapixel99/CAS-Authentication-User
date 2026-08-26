@@ -36,6 +36,14 @@ declare class CASAuthentication {
   readonly timeout: number;
   /** Whether the session id is regenerated on successful login. */
   readonly regenerate_session: boolean;
+  /** Where diagnostics are reported. Defaults to `console`. */
+  readonly logger: CASAuthentication.Logger;
+  /**
+   * Whether `req.session.userType` is written and cleared by this library.
+   * @deprecated Set `manage_user_type: false` and own the field. Managing it
+   * here will be removed in 1.0.
+   */
+  readonly manage_user_type: boolean;
 
   /**
    * Redirects an unauthenticated client to the CAS login page and then back to
@@ -75,18 +83,41 @@ declare class CASAuthentication {
 
   /**
    * Validates a service ticket against the CAS server, independently of any
-   * request or session. Exposed for building alternative front ends; the
-   * Passport strategy in `cas-authentication-user/strategy` wraps this.
+   * request or session, and resolves with the authenticated identity.
+   *
+   * The whole of ticket validation without a request, a session or a callback,
+   * which is what an alternative front end needs. Rejects with the validation
+   * error rather than resolving with a falsy user, so a failure cannot be
+   * missed by forgetting to check.
+   */
+  validateTicket(
+    params: CASAuthentication.ValidateTicketParams,
+  ): Promise<CASAuthentication.ValidatedTicket>;
+
+  /**
+   * The callback form of `validateTicket`. Called without a callback it
+   * returns the same promise; prefer `validateTicket` in new code.
    */
   _validateTicket(
     params: CASAuthentication.ValidateTicketParams,
     callback: (err: Error | null, user?: string, attributes?: CASAuthentication.CASAttributes) => void,
   ): void;
+  _validateTicket(
+    params: CASAuthentication.ValidateTicketParams,
+  ): Promise<CASAuthentication.ValidatedTicket>;
 }
 
 declare namespace CASAuthentication {
   /** Supported CAS protocol versions. */
   type CasVersion = '1.0' | '2.0' | '3.0' | 'saml1.1';
+
+  /**
+   * Somewhere to report diagnostics. `console` satisfies this, as do the
+   * common logging libraries.
+   */
+  interface Logger {
+    error(...args: any[]): void;
+  }
 
   /**
    * A single attribute value. Nested attribute elements are passed through as
@@ -163,6 +194,37 @@ declare namespace CASAuthentication {
      * is preserved; only the id changes. Defaults to `true`.
      */
     regenerate_session?: boolean;
+    /**
+     * Where to report diagnostics: failed validations, transport errors and
+     * session-store failures. Everything this library reports is a diagnostic
+     * rather than a thrown error, so without one a failed validation leaves no
+     * trace. Defaults to `console`.
+     */
+    logger?: Logger;
+    /**
+     * Whether this library blanks `req.session.userType` on every
+     * unauthenticated pass and clears it on logout. `userType` is not part of
+     * the CAS protocol and nothing here reads it, so managing it is a library
+     * reaching into an application's own session state.
+     *
+     * Set to `false` to own the field yourself, which will be the only
+     * behaviour in 1.0. The blanking is not pointless — `userType` is what
+     * applications tend to authorise on, and a stale value left beside a
+     * cleared username invites acting on a privilege that is no longer held —
+     * so an application that opts out takes on clearing it on logout, or sets
+     * `destroy_session`.
+     *
+     * @deprecated Defaults to `true` only for compatibility.
+     */
+    manage_user_type?: boolean;
+  }
+
+  /** What a successful ticket validation resolves with. */
+  interface ValidatedTicket {
+    /** The authenticated CAS username. Never empty: a blank one is an error. */
+    user: string;
+    /** Attributes released by CAS, `{}` when none were supplied. */
+    attributes: CASAttributes;
   }
 
   interface ValidateTicketParams {
@@ -185,6 +247,12 @@ declare namespace CASAuthentication {
    * check terminates even for a client whose session does not persist.
    */
   const GATEWAY_QUERY_PARAM: string;
+
+  /**
+   * The session key this library writes when `manage_user_type` is on.
+   * Exported so an application that has opted out can clear the same key.
+   */
+  const USER_TYPE_SESSION_KEY: string;
 
   /**
    * Serialises query parameters the way the CAS service URL requires: a space
