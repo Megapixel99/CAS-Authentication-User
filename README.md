@@ -15,7 +15,7 @@ All four protocol versions CAS defines are implemented, each with its own valida
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
-**Write-up:** [What Maintaining a Forked npm Package Actually Buys](https://sethwheeler.dev/blog/forked-package-semver/) — a caret below 1.0.0 walls off the published fix, so `npm audit` reports "No fix available"; what it could not see was the open redirect this fork shipped for seven years while auditing clean.
+**Write-up:** [What Maintaining a Forked npm Package Actually Buys](https://sethwheeler.dev/blog/forked-package-semver/) — a caret below 1.0.0 walls off the published fix, so `npm audit` reports "No fix available"; what it could not see was the pair of open redirects this fork shipped for seven years while auditing clean. Both date from the first publish in 2019, and fixing one did nothing for the other: `returnTo` was validated in 0.3.0, while the request path reaches `res.redirect` without passing through `returnTo` at all and went unfixed until 0.4.0, eight days later.
 
 ## Requirements
 
