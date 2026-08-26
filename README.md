@@ -6,7 +6,7 @@ Middleware and route handlers that authenticate an [Express](https://expressjs.c
 
 This package is a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1); see [Origins](#origins) for what came from there and what was added here.
 
-All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 216 tests across 13 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
+All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 224 tests across 14 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
@@ -59,6 +59,7 @@ let cas = new CASAuthentication({
 | destroy_session | _boolean_ | If true, `logout` destroys the whole session; otherwise it deletes only the keys this library writes. | _false_ |
 | timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely, since `http.request` applies no timeout of its own. 0 waits forever. | _10000_ |
 | regenerate_session | _boolean_ | If true, the session identifier is regenerated when a client authenticates, so a session fixed by an attacker beforehand does not carry over. Data already in the session is preserved; only the identifier changes. | _true_ |
+| logger | _object_ | Where diagnostics are reported. Any object with an `error(...args)` method, which `console` and the common logging libraries all satisfy. See [Diagnostics](#diagnostics). | _console_ |
 
 ## Usage
 
@@ -281,6 +282,22 @@ app.use('/portal', router);
 ```
 
 Set `service_url` to the application's origin and leave the mount prefix out of it. Versions before 0.3.0 built the service URL from the mount-relative path, which sent CAS a path with the prefix missing; if that was compensated for by putting the prefix into `service_url`, remove it.
+
+### Diagnostics
+
+Nothing this library reports is thrown. A ticket CAS rejects, a CAS server that cannot be reached, a session store that fails to regenerate — each of these is a condition the request has already recovered from by the time it is reported, so raising it would turn a handled case into an unhandled one. They are written to `logger.error` instead.
+
+The consequence is that with the default `console` these lines land on stderr, separate from wherever the application's own logs go, and in a container they are easy to lose. Pass a `logger` to put them in the same place as everything else:
+
+```javascript
+let cas = new CASAuthentication({
+  cas_url: 'https://my-cas-host.com/cas',
+  service_url: 'https://my-service-host.com',
+  logger: pino({ name: 'cas' })   // or bunyan, winston, or your own { error() }
+});
+```
+
+Any object with an `error(...args)` method will do. The constructor throws if it is given anything else, since a logger that silently fails to log is worse than none.
 
 ### Validation failures
 

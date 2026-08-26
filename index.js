@@ -235,7 +235,7 @@ function CASAuthentication(options) {
           }
           return callback(new Error('CAS authentication failed.'));
         } catch (err) {
-          console.error(err);
+          this.logger.error('CAS response could not be read: ', err);
           return callback(new Error('CAS authentication failed.'));
         }
       });
@@ -278,7 +278,7 @@ function CASAuthentication(options) {
           return callback(null, samlResponse.assertion.authenticationstatement.subject.nameidentifier,
             attributes);
         } catch (err) {
-          console.error(err);
+          this.logger.error('CAS response could not be read: ', err);
           return callback(new Error('CAS authentication failed.'));
         }
       });
@@ -332,6 +332,15 @@ function CASAuthentication(options) {
   this.regenerate_session = options.regenerate_session !== undefined
     ? !!options.regenerate_session
     : true;
+
+  // Everything this library reports is a diagnostic, never a thrown error, so
+  // without somewhere to send it a failed validation is invisible. console is
+  // the default because it always exists; an application with real logging
+  // passes its own and gets these lines in the same place as the rest.
+  this.logger = options.logger !== undefined ? options.logger : console;
+  if (!this.logger || typeof this.logger.error !== 'function') {
+    throw new Error('CAS Authentication requires logger to be an object with an error method.');
+  }
 
   // Bind the prototype routing methods to this instance of CASAuthentication.
   this.bounce = this.bounce.bind(this);
@@ -474,7 +483,7 @@ CASAuthentication.prototype._returnToFor = function (req) {
       return encodeURI(returnTo);
     } catch (err) {
       // encodeURI rejects lone surrogates. Fall back rather than fail the request.
-      console.error(err);
+      this.logger.error('returnTo could not be encoded, falling back to the request path: ', err);
     }
   }
   return requestPath(req);
@@ -575,7 +584,7 @@ CASAuthentication.prototype.logout = function (req, res, next) {
   if (this.destroy_session) {
     req.session.destroy((err) => {
       if (err) {
-        console.error(err);
+        this.logger.error('Session store failed to destroy the session on logout: ', err);
       }
     });
   }
@@ -668,7 +677,7 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
     response.on('end', () => {
       this._validate(body, (err, user, attributes) => {
         if (err) {
-          console.error(err);
+          this.logger.error('CAS rejected the ticket: ', err);
           done(err);
           return;
         }
@@ -677,7 +686,7 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
         // request, which loops between the application and CAS indefinitely.
         if (user === undefined || user === null || String(user).trim() === '') {
           const blank = new Error('CAS authentication succeeded without a username.');
-          console.error(blank);
+          this.logger.error(blank);
           done(blank);
           return;
         }
@@ -685,13 +694,13 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       });
     });
     response.on('error', (err) => {
-      console.error('Response error from CAS: ', err);
+      this.logger.error('Response error from CAS: ', err);
       done(err);
     });
   });
 
   request.on('error', (err) => {
-    console.error('Request error with CAS: ', err);
+    this.logger.error('Request error with CAS: ', err);
     done(err);
   });
 
@@ -750,7 +759,7 @@ CASAuthentication.prototype._establishSession = function (req, user, attributes,
     if (err) {
       // The store failed to drop the old record. express-session has still
       // handed us a fresh session, so carry on rather than failing the login.
-      console.error(err);
+      this.logger.error('Session store failed to regenerate the session on login: ', err);
     }
     Object.assign(req.session, preserved);
     store();

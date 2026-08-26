@@ -36,6 +36,8 @@ declare class CASAuthentication {
   readonly timeout: number;
   /** Whether the session id is regenerated on successful login. */
   readonly regenerate_session: boolean;
+  /** Where diagnostics are reported. Defaults to `console`. */
+  readonly logger: CASAuthentication.Logger;
 
   /**
    * Redirects an unauthenticated client to the CAS login page and then back to
@@ -87,6 +89,14 @@ declare class CASAuthentication {
 declare namespace CASAuthentication {
   /** Supported CAS protocol versions. */
   type CasVersion = '1.0' | '2.0' | '3.0' | 'saml1.1';
+
+  /**
+   * Somewhere to report diagnostics. `console` satisfies this, as do the
+   * common logging libraries.
+   */
+  interface Logger {
+    error(...args: any[]): void;
+  }
 
   /**
    * A single attribute value. Nested attribute elements are passed through as
@@ -163,6 +173,13 @@ declare namespace CASAuthentication {
      * is preserved; only the id changes. Defaults to `true`.
      */
     regenerate_session?: boolean;
+    /**
+     * Where to report diagnostics: failed validations, transport errors and
+     * session-store failures. Everything this library reports is a diagnostic
+     * rather than a thrown error, so without one a failed validation leaves no
+     * trace. Defaults to `console`.
+     */
+    logger?: Logger;
   }
 
   interface ValidateTicketParams {

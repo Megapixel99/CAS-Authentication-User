@@ -154,6 +154,19 @@ new CASAuthentication();
 // @ts-expect-error the verify callback must be a function
 new CasStrategy({ cas }, 'nope');
 
+// A logger is anything with an error method; console and pino-shaped loggers
+// both satisfy it.
+const consoleLogged = new CASAuthentication({ cas_url: 'x', service_url: 'y', logger: console });
+const customLogged = new CASAuthentication({
+  cas_url: 'x',
+  service_url: 'y',
+  logger: { error: (...args: unknown[]) => void args },
+});
+const loggerBack: CASAuthentication.Logger = customLogged.logger;
+
+// @ts-expect-error a logger has to provide error()
+new CASAuthentication({ cas_url: 'x', service_url: 'y', logger: { warn: () => {} } });
+
 declare const someAttributes: CASAuthentication.CASAttributes;
 
 // @ts-expect-error an attribute value is not necessarily a string
@@ -164,3 +177,4 @@ someAttributes.address.toUpperCase();
 
 void minimal; void version; void port; void info; void strategyName; void client; void app;
 void marker; void notAString; void timeout; void regenerates;
+void consoleLogged; void loggerBack;
