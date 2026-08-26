@@ -38,6 +38,12 @@ declare class CASAuthentication {
   readonly regenerate_session: boolean;
   /** Where diagnostics are reported. Defaults to `console`. */
   readonly logger: CASAuthentication.Logger;
+  /**
+   * Whether `req.session.userType` is written and cleared by this library.
+   * @deprecated Set `manage_user_type: false` and own the field. Managing it
+   * here will be removed in 1.0.
+   */
+  readonly manage_user_type: boolean;
 
   /**
    * Redirects an unauthenticated client to the CAS login page and then back to
@@ -195,6 +201,22 @@ declare namespace CASAuthentication {
      * trace. Defaults to `console`.
      */
     logger?: Logger;
+    /**
+     * Whether this library blanks `req.session.userType` on every
+     * unauthenticated pass and clears it on logout. `userType` is not part of
+     * the CAS protocol and nothing here reads it, so managing it is a library
+     * reaching into an application's own session state.
+     *
+     * Set to `false` to own the field yourself, which will be the only
+     * behaviour in 1.0. The blanking is not pointless — `userType` is what
+     * applications tend to authorise on, and a stale value left beside a
+     * cleared username invites acting on a privilege that is no longer held —
+     * so an application that opts out takes on clearing it on logout, or sets
+     * `destroy_session`.
+     *
+     * @deprecated Defaults to `true` only for compatibility.
+     */
+    manage_user_type?: boolean;
   }
 
   /** What a successful ticket validation resolves with. */
@@ -225,6 +247,12 @@ declare namespace CASAuthentication {
    * check terminates even for a client whose session does not persist.
    */
   const GATEWAY_QUERY_PARAM: string;
+
+  /**
+   * The session key this library writes when `manage_user_type` is on.
+   * Exported so an application that has opted out can clear the same key.
+   */
+  const USER_TYPE_SESSION_KEY: string;
 
   /**
    * Serialises query parameters the way the CAS service URL requires: a space

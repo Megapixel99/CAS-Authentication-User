@@ -169,6 +169,24 @@ function appendQueryParam(target, param) {
 }
 
 /**
+ * Session key this library writes but does not own.
+ *
+ * userType is not part of the CAS protocol and nothing here ever reads it: the
+ * library blanks it on every unauthenticated pass and clears it on logout, and
+ * leaves the application to populate it. That is a library reaching into an
+ * application's own session state, and it is deprecated - set
+ * `manage_user_type: false` to take ownership of the field, which will become
+ * the only behaviour in 1.0.
+ *
+ * The blanking is not pointless, which is why it cannot simply be dropped: the
+ * field is what applications tend to authorise on, so a stale value left beside
+ * a cleared username invites acting on a privilege that is no longer held. An
+ * application that opts out takes on clearing it, or uses destroy_session.
+ * @type {string}
+ */
+const USER_TYPE_SESSION_KEY = 'userType';
+
+/**
  * @typedef {Object} CAS_options
  * @property {string}  cas_url
  * @property {string}  service_url
@@ -337,6 +355,12 @@ function CASAuthentication(options) {
   // without somewhere to send it a failed validation is invisible. console is
   // the default because it always exists; an application with real logging
   // passes its own and gets these lines in the same place as the rest.
+  // Deprecated, and default true only so that an existing deployment reading
+  // req.session.userType keeps working. See _resetUserType.
+  this.manage_user_type = options.manage_user_type !== undefined
+    ? !!options.manage_user_type
+    : true;
+
   this.logger = options.logger !== undefined ? options.logger : console;
   if (!this.logger || typeof this.logger.error !== 'function') {
     throw new Error('CAS Authentication requires logger to be an object with an error method.');
@@ -422,7 +446,7 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   // If dev mode is active, set the CAS user to the specified dev user.
   else if (this.is_dev_mode) {
     delete req.session[GATEWAY_SESSION_FLAG];
-    req.session.userType = '';
+    this._resetUserType(req);
     req.session[this.session_name] = this.dev_mode_user;
     if (this.session_info) {
       req.session[this.session_info] = this.dev_mode_info;
@@ -454,13 +478,13 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
       if (!this.renew) {
         req.session[GATEWAY_SESSION_FLAG] = true;
       }
-      req.session.userType = '';
+      this._resetUserType(req);
       this._redirectToCas(req, res, true);
     }
   }
   // Otherwise, redirect the user to the CAS login.
   else {
-    req.session.userType = '';
+    this._resetUserType(req);
     this.login(req, res, next);
   }
 };
@@ -497,6 +521,12 @@ CASAuthentication.prototype._returnToFor = function (req) {
  * than failing later with a TypeError about a property of undefined. Forgetting
  * the session middleware is the most common way to misconfigure this library.
  */
+CASAuthentication.prototype._resetUserType = function (req) {
+  if (this.manage_user_type) {
+    req.session[USER_TYPE_SESSION_KEY] = '';
+  }
+};
+
 CASAuthentication.prototype._requireSession = function (req) {
   if (!req.session) {
     throw new Error('CAS Authentication requires session support. Add express-session '
@@ -595,15 +625,19 @@ CASAuthentication.prototype.logout = function (req, res, next) {
     if (this.session_info) {
       delete req.session[this.session_info];
     }
-    // Clear everything else this library writes. userType in particular is
-    // authorisation-relevant: leaving the previous user's value behind while
-    // their username is gone lets an application that reads it alone act on a
-    // stale privilege. Only needed on this branch - destroying the whole session
-    // takes all of it along, and express-session's destroy() removes req.session
-    // outright, so touching it afterwards would throw.
+    // Clear everything else this library writes. Only needed on this branch -
+    // destroying the whole session takes all of it along, and express-session's
+    // destroy() removes req.session outright, so touching it afterwards would
+    // throw.
     delete req.session[GATEWAY_SESSION_FLAG];
-    delete req.session.userType;
     delete req.session.cas_return_to;
+    // userType is authorisation-relevant: leaving the previous user's value
+    // behind while their username is gone lets an application that reads it
+    // alone act on a stale privilege. An application that has opted out of
+    // userType clears it itself, or sets destroy_session.
+    if (this.manage_user_type) {
+      delete req.session[USER_TYPE_SESSION_KEY];
+    }
   }
 
   // Redirect the client to the CAS logout.
@@ -842,6 +876,7 @@ CASAuthentication.prototype._requestPath = function (req) {
 
 // Shared with the Passport strategy, which builds the same login URL.
 CASAuthentication.formatQuery = formatQuery;
+CASAuthentication.USER_TYPE_SESSION_KEY = USER_TYPE_SESSION_KEY;
 CASAuthentication.GATEWAY_SESSION_FLAG = GATEWAY_SESSION_FLAG;
 CASAuthentication.GATEWAY_QUERY_PARAM = GATEWAY_QUERY_PARAM;
 
