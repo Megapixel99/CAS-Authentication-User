@@ -6,7 +6,7 @@ Middleware and route handlers that authenticate an [Express](https://expressjs.c
 
 This package is a fork of [cas-authentication](https://github.com/kayleecodes1/cas-authentication) by [kayleecodes1](https://github.com/kayleecodes1); see [Origins](#origins) for what came from there and what was added here.
 
-All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 233 tests across 15 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
+All four protocol versions CAS defines are implemented, each with its own validation endpoint and its own response parser: 1.0 at `/validate`, 2.0 at `/serviceValidate`, 3.0 at `/p3/serviceValidate`, and SAML 1.1 at `/samlValidate`. The version is resolved once in the constructor (which assigns the endpoint and the parser together), so every path downstream of it is version-agnostic. `npm test` reports 242 tests across 16 files and requires no CAS deployment to run any of them, because the suite stands up a local HTTP server that plays the CAS role; two of those files drive the middleware through real Express, real [express-session](https://www.npmjs.com/package/express-session) and real [Passport](https://www.passportjs.org/) rather than through doubles.
 
 There is one runtime dependency, [xml2js](https://www.npmjs.com/package/xml2js), which parses the CAS 2.0, 3.0 and SAML 1.1 responses. Though a Passport strategy ships with the package, `passport` itself is not a dependency of it.
 
@@ -60,6 +60,7 @@ let cas = new CASAuthentication({
 | timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely, since `http.request` applies no timeout of its own. 0 waits forever. | _10000_ |
 | regenerate_session | _boolean_ | If true, the session identifier is regenerated when a client authenticates, so a session fixed by an attacker beforehand does not carry over. Data already in the session is preserved; only the identifier changes. | _true_ |
 | logger | _object_ | Where diagnostics are reported. Any object with an `error(...args)` method, which `console` and the common logging libraries all satisfy. See [Diagnostics](#diagnostics). | _console_ |
+| manage_user_type | _boolean_ | Whether this library writes and clears `req.session.userType`. Deprecated; see [The userType session key](#the-usertype-session-key). | _true_ |
 
 ## Usage
 
@@ -96,7 +97,7 @@ app.get('/api/user', cas.block, ( req, res ) => {
 });
 
 // userType starts as an empty string; populating it from your own records is
-// left to the application.
+// left to the application. Deprecated - see The userType session key.
 app.get('/api/user-type', cas.block, ( req, res ) => {
   res.json({ cas_user_type: req.session.userType });
 });
@@ -283,6 +284,22 @@ app.use('/portal', router);
 
 Set `service_url` to the application's origin and leave the mount prefix out of it. Versions before 0.3.0 built the service URL from the mount-relative path, which sent CAS a path with the prefix missing; if that was compensated for by putting the prefix into `service_url`, remove it.
 
+### The userType session key
+
+`req.session.userType` is not part of the CAS protocol, and nothing in this library reads it. The library blanks it on every unauthenticated pass and deletes it on logout; populating it is left to the application. That is a library reaching into an application's own session state, and it is deprecated.
+
+```javascript
+let cas = new CASAuthentication({
+  cas_url: 'https://my-cas-host.com/cas',
+  service_url: 'https://my-service-host.com',
+  manage_user_type: false     // the only behaviour in 1.0
+});
+```
+
+The blanking is not pointless, which is why the field cannot simply stop being touched. `userType` is what applications tend to authorise on, so a value left over from the previous user, sitting beside a username that has been cleared, invites acting on a privilege that is no longer held. **An application that opts out takes that on:** clear the key on logout, or set `destroy_session: true` and let the whole session go. `CASAuthentication.USER_TYPE_SESSION_KEY` is exported so the same key can be used.
+
+The default stays `true` until 1.0, so nothing changes for an existing deployment that has not asked for it.
+
 ### Validating a ticket on your own
 
 `validateTicket` is ticket validation with no request, no session and no callback — the protocol selection, the HTTP call and the XML parsing, and nothing else. It is what the Passport strategy is built on, and what to build on for any other front end:
@@ -328,7 +345,7 @@ The last of those matters more than it looks. An empty username would be stored 
 
 The session identifier is regenerated when a client authenticates. Without that, an attacker able to plant a session cookie on a victim before they log in would still hold a valid handle on the authenticated session afterwards (session fixation). Anything the application had already put in the session is copied across, so only the identifier changes. Setting `regenerate_session: false` switches the behaviour off.
 
-`logout` removes every session key this library writes: the CAS username, the CAS attributes, `cas_return_to`, `userType`, and the gateway flag. `userType` is the one that matters most, since it is what applications tend to authorise on, and leaving the previous user's value behind while their username is gone invites acting on a privilege that is no longer held. With `destroy_session: true` the whole session goes instead.
+`logout` removes every session key this library writes: the CAS username, the CAS attributes, `cas_return_to`, the gateway flag, and — while `manage_user_type` is on — `userType`. That last one matters most, since it is what applications tend to authorise on, and leaving the previous user's value behind while their username is gone invites acting on a privilege that is no longer held; an application that has [opted out](#the-usertype-session-key) clears it itself. With `destroy_session: true` the whole session goes instead.
 
 ## Tests
 

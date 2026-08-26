@@ -175,6 +175,14 @@ async function validates() {
   return [user, attributes, promised] as const;
 }
 
+const ownsUserType = new CASAuthentication({
+  cas_url: 'x', service_url: 'y', manage_user_type: false,
+});
+const userTypeKey: string = CASAuthentication.USER_TYPE_SESSION_KEY;
+
+// @ts-expect-error manage_user_type is a boolean
+new CASAuthentication({ cas_url: 'x', service_url: 'y', manage_user_type: 'no' });
+
 declare const validated: CASAuthentication.ValidatedTicket;
 
 // attributes is never undefined on a resolved validation, so no guard is needed.
@@ -194,3 +202,4 @@ someAttributes.address.toUpperCase();
 void minimal; void version; void port; void info; void strategyName; void client; void app;
 void marker; void notAString; void timeout; void regenerates;
 void consoleLogged; void loggerBack; void validates; void attrValue; void userIsNotBoolean;
+void ownsUserType; void userTypeKey;
