@@ -343,6 +343,7 @@ function CASAuthentication(options) {
   }
 
   // Bind the prototype routing methods to this instance of CASAuthentication.
+  this.validateTicket = this.validateTicket.bind(this);
   this.bounce = this.bounce.bind(this);
   this.bounce_redirect = this.bounce_redirect.bind(this);
   this.block = this.block.bind(this);
@@ -617,13 +618,26 @@ CASAuthentication.prototype.logout = function (req, res, next) {
  * req/res/session coupling so other front ends can reuse it - the Passport
  * strategy in strategy.js wraps exactly this method.
  *
+ * Called with a callback it reports through that. Called without one it
+ * returns a promise, which is the form to prefer in new code - see
+ * validateTicket below.
+ *
  * @param {Object}   params
  * @param {string}   params.ticket  The service ticket issued by CAS.
  * @param {string}   params.service The service URL the ticket was issued for.
  * @param {string}   [params.host]  Host used to build the SAML 1.1 RequestID.
- * @param {function(Error, string=, Object=)} callback
+ * @param {function(Error, string=, Object=)} [callback]
+ * @returns {Promise<{user: string, attributes: Object}>|undefined}
  */
 CASAuthentication.prototype._validateTicket = function (params, callback) {
+  if (callback === undefined) {
+    return this.validateTicket(params);
+  }
+  if (typeof callback !== 'function') {
+    // Otherwise this surfaces as a TypeError from inside the response handler,
+    // long after the call that caused it.
+    throw new Error('CAS Authentication was given a _validateTicket callback that is not a function.');
+  }
   const { ticket, service } = params;
   const requestOptions = {
     host: this.cas_host,
@@ -716,6 +730,34 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
     request.write(post_data);
   }
   request.end();
+  return undefined;
+};
+
+/**
+ * Validates a service ticket against the CAS server and resolves with the
+ * authenticated identity.
+ *
+ * The promise-returning form of _validateTicket, and the one to prefer: it is
+ * the whole public surface of ticket validation without a request, a session or
+ * a callback, which is what an alternative front end needs. Rejects with the
+ * validation error rather than resolving with a falsy user, so a failure cannot
+ * be missed by forgetting to check.
+ *
+ * @param {Object} params As _validateTicket.
+ * @returns {Promise<{user: string, attributes: Object}>}
+ */
+CASAuthentication.prototype.validateTicket = function (params) {
+  return new Promise((resolve, reject) => {
+    this._validateTicket(params, (err, user, attributes) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      // Normalised to {} so a caller can read an attribute without guarding
+      // first; CAS 1.0 never supplies attributes at all.
+      resolve({ user, attributes: attributes || {} });
+    });
+  });
 };
 
 /**

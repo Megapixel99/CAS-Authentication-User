@@ -77,13 +77,28 @@ declare class CASAuthentication {
 
   /**
    * Validates a service ticket against the CAS server, independently of any
-   * request or session. Exposed for building alternative front ends; the
-   * Passport strategy in `cas-authentication-user/strategy` wraps this.
+   * request or session, and resolves with the authenticated identity.
+   *
+   * The whole of ticket validation without a request, a session or a callback,
+   * which is what an alternative front end needs. Rejects with the validation
+   * error rather than resolving with a falsy user, so a failure cannot be
+   * missed by forgetting to check.
+   */
+  validateTicket(
+    params: CASAuthentication.ValidateTicketParams,
+  ): Promise<CASAuthentication.ValidatedTicket>;
+
+  /**
+   * The callback form of `validateTicket`. Called without a callback it
+   * returns the same promise; prefer `validateTicket` in new code.
    */
   _validateTicket(
     params: CASAuthentication.ValidateTicketParams,
     callback: (err: Error | null, user?: string, attributes?: CASAuthentication.CASAttributes) => void,
   ): void;
+  _validateTicket(
+    params: CASAuthentication.ValidateTicketParams,
+  ): Promise<CASAuthentication.ValidatedTicket>;
 }
 
 declare namespace CASAuthentication {
@@ -180,6 +195,14 @@ declare namespace CASAuthentication {
      * trace. Defaults to `console`.
      */
     logger?: Logger;
+  }
+
+  /** What a successful ticket validation resolves with. */
+  interface ValidatedTicket {
+    /** The authenticated CAS username. Never empty: a blank one is an error. */
+    user: string;
+    /** Attributes released by CAS, `{}` when none were supplied. */
+    attributes: CASAttributes;
   }
 
   interface ValidateTicketParams {

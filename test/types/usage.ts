@@ -167,6 +167,22 @@ const loggerBack: CASAuthentication.Logger = customLogged.logger;
 // @ts-expect-error a logger has to provide error()
 new CASAuthentication({ cas_url: 'x', service_url: 'y', logger: { warn: () => {} } });
 
+// Ticket validation has a promise form and a callback form.
+async function validates() {
+  const { user, attributes } = await cas.validateTicket({ ticket: 't', service: 's' });
+  const promised: Promise<CASAuthentication.ValidatedTicket> = cas._validateTicket({ ticket: 't', service: 's' });
+  cas._validateTicket({ ticket: 't', service: 's' }, (err, u) => void [err, u]);
+  return [user, attributes, promised] as const;
+}
+
+declare const validated: CASAuthentication.ValidatedTicket;
+
+// attributes is never undefined on a resolved validation, so no guard is needed.
+const attrValue: CASAuthentication.CASAttributeValue = validated.attributes.displayname;
+
+// @ts-expect-error a resolved validation carries a string user, not a boolean
+const userIsNotBoolean: boolean = validated.user;
+
 declare const someAttributes: CASAuthentication.CASAttributes;
 
 // @ts-expect-error an attribute value is not necessarily a string
@@ -177,4 +193,4 @@ someAttributes.address.toUpperCase();
 
 void minimal; void version; void port; void info; void strategyName; void client; void app;
 void marker; void notAString; void timeout; void regenerates;
-void consoleLogged; void loggerBack;
+void consoleLogged; void loggerBack; void validates; void attrValue; void userIsNotBoolean;
