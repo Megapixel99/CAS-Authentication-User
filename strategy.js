@@ -1,6 +1,5 @@
 'use strict';
 
-const url = require('url');
 const CASAuthentication = require('./index.js');
 
 /**
@@ -83,7 +82,7 @@ Strategy.prototype._loginUrl = function (service, useGateway) {
     query.service = `${service}${service.indexOf('?') >= 0 ? '&' : '?'}`
       + `${CASAuthentication.GATEWAY_QUERY_PARAM}=1`;
   }
-  return this.cas.cas_url + url.format({ pathname: '/login', query });
+  return `${this.cas.cas_url}/login?${CASAuthentication.formatQuery(query)}`;
 };
 
 /**

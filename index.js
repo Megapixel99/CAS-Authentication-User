@@ -1,4 +1,3 @@
-const url = require('url');
 const http = require('http');
 const https = require('https');
 const parseXML = require('xml2js').parseString;
@@ -45,6 +44,67 @@ const GATEWAY_SESSION_FLAG = 'cas_gateway_attempted';
 const GATEWAY_QUERY_PARAM = 'cas_gateway';
 
 /**
+ * Base used to parse a request URL, which arrives as a path rather than an
+ * absolute URL. The WHATWG parser requires an absolute URL, so the path is
+ * resolved against a host that cannot exist; only the path and query are ever
+ * read back off the result.
+ * @type {string}
+ */
+const REQUEST_URL_BASE = 'http://cas-authentication.invalid';
+
+/**
+ * Parses a request URL, rejecting anything that escapes the dummy origin.
+ *
+ * A path is only supposed to address this application. Some values do not:
+ * `//host` is protocol-relative, and `/\\host` is the variant browsers
+ * normalise to it. Resolved against the base, either produces a URL pointing at
+ * another host, which this reports by returning null so the caller can fall
+ * back to the site root.
+ *
+ * The legacy parser this replaced returned `//host` as a *pathname*, which the
+ * callers then handed to res.redirect - an off-site redirect from a value the
+ * client controls. Reading the origin back is what closes that.
+ */
+function parseRequestUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value, REQUEST_URL_BASE);
+  } catch (err) {
+    return null;
+  }
+  return parsed.origin === REQUEST_URL_BASE ? parsed : null;
+}
+
+/**
+ * Builds a query string the way the legacy url.format did.
+ *
+ * Deliberately not URLSearchParams: that serialises a space as `+` and
+ * percent-encodes `~!*()`, so the `service` value CAS received would no longer
+ * be the one the application sent. CAS honours a ticket only for the exact
+ * service string it was issued for, which makes this encoding load-bearing
+ * rather than cosmetic. encodeURIComponent reproduces the previous bytes.
+ */
+function formatQuery(params) {
+  return Object.keys(params)
+    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join('&');
+}
+
+/**
+ * The hostname of an absolute service URL, or null if it will not parse.
+ *
+ * Only used to label a SAML 1.1 RequestID, so an unparseable value falls back
+ * rather than failing the validation.
+ */
+function serviceHostname(service) {
+  try {
+    return new URL(service).hostname;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
  * The request URL as the client sent it, including any router mount prefix.
  *
  * Inside a mounted router (`app.use('/portal', router)`) both req.url and
@@ -60,7 +120,25 @@ function requestUrl(req) {
  * The path portion of the request URL, mount prefix included.
  */
 function requestPath(req) {
-  return url.parse(requestUrl(req)).pathname || req.path || '/';
+  const parsed = parseRequestUrl(requestUrl(req));
+  if (!parsed) {
+    // The client sent a path that resolves to another origin. Falling back to
+    // req.path would reintroduce it, since Express derives that from the same
+    // string, so this goes to the site root.
+    return '/';
+  }
+  return parsed.pathname || req.path || '/';
+}
+
+/**
+ * The path and query of the request URL, mount prefix included.
+ */
+function requestPathWithQuery(req) {
+  const parsed = parseRequestUrl(requestUrl(req));
+  if (!parsed) {
+    return '/';
+  }
+  return (parsed.pathname || req.path || '/') + parsed.search;
 }
 
 /**
@@ -210,11 +288,20 @@ function CASAuthentication(options) {
   }
 
   this.cas_url = options.cas_url;
-  const parsed_cas_url = url.parse(this.cas_url);
+  let parsed_cas_url;
+  try {
+    parsed_cas_url = new URL(this.cas_url);
+  } catch (err) {
+    // The legacy parser accepted anything and left the pieces empty, so a
+    // typo surfaced later as a request to an undefined host. Say so here.
+    throw new Error(`CAS Authentication was given a cas_url that is not a valid URL ("${this.cas_url}").`);
+  }
   this.request_client = parsed_cas_url.protocol === 'http:' ? http : https;
   this.cas_host = parsed_cas_url.hostname;
   // Use an explicit port if cas_url carries one, and fall back to the default
-  // for the protocol otherwise.
+  // for the protocol otherwise. WHATWG parsing reports no port as '', and also
+  // drops one that matches the protocol default - which lands on the same
+  // number either way.
   this.cas_port = parsed_cas_url.port
     ? Number(parsed_cas_url.port)
     : (parsed_cas_url.protocol === 'http:' ? 80 : 443);
@@ -314,7 +401,7 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
       const returnTo = req.query && req.query.returnTo;
       req.session.cas_return_to = isSafeReturnTo(returnTo)
         ? returnTo
-        : (url.parse(requestUrl(req)).path || requestPath(req));
+        : requestPathWithQuery(req);
       res.redirect(req.session.cas_return_to);
     }
     // Otherwise, allow them through to their request.
@@ -431,8 +518,11 @@ CASAuthentication.prototype._gatewayAlreadyChecked = function (req) {
  * original value.
  */
 CASAuthentication.prototype._serviceForRequest = function (req) {
-  const parsed = url.parse(requestUrl(req));
-  const search = (parsed.search || '').replace(/^\?/, '');
+  const parsed = parseRequestUrl(requestUrl(req));
+  if (!parsed) {
+    return this.service_url + requestPath(req);
+  }
+  const search = parsed.search.replace(/^\?/, '');
   const kept = search.split('&')
     .filter((pair) => pair !== '' && pair.split('=')[0] !== 'ticket');
   return this.service_url + (parsed.pathname || requestPath(req))
@@ -466,10 +556,7 @@ CASAuthentication.prototype._redirectToCas = function (req, res, useGateway) {
   }
   query.service = service;
   // Redirect to the CAS login.
-  res.redirect(this.cas_url + url.format({
-    pathname: '/login',
-    query,
-  }));
+  res.redirect(`${this.cas_url}/login?${formatQuery(query)}`);
 };
 
 /**
@@ -548,16 +635,10 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
 
   if (['1.0', '2.0', '3.0'].indexOf(this.cas_version) >= 0) {
     requestOptions.method = 'GET';
-    requestOptions.path = url.format({
-      pathname: this.cas_path + this._validateUri,
-      query: {
-        service,
-        ticket,
-      },
-    });
+    requestOptions.path = `${this.cas_path + this._validateUri}?${formatQuery({ service, ticket })}`;
   } else if (this.cas_version === 'saml1.1') {
     const now = new Date();
-    const request_host = params.host || url.parse(service).hostname || 'localhost';
+    const request_host = params.host || serviceHostname(service) || 'localhost';
     post_data = '<?xml version="1.0" encoding="utf-8"?>\n'
       + '<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">\n'
       + '  <SOAP-ENV:Header/>\n'
@@ -573,13 +654,7 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       + '</SOAP-ENV:Envelope>';
 
     requestOptions.method = 'POST';
-    requestOptions.path = url.format({
-      pathname: this.cas_path + this._validateUri,
-      query: {
-        TARGET: service,
-        ticket: '',
-      },
-    });
+    requestOptions.path = `${this.cas_path + this._validateUri}?${formatQuery({ TARGET: service, ticket: '' })}`;
     requestOptions.headers = {
       'Content-Type': 'text/xml',
       'Content-Length': Buffer.byteLength(post_data),
@@ -714,6 +789,8 @@ CASAuthentication.prototype._requestPath = function (req) {
   return requestPath(req);
 };
 
+// Shared with the Passport strategy, which builds the same login URL.
+CASAuthentication.formatQuery = formatQuery;
 CASAuthentication.GATEWAY_SESSION_FLAG = GATEWAY_SESSION_FLAG;
 CASAuthentication.GATEWAY_QUERY_PARAM = GATEWAY_QUERY_PARAM;
 
