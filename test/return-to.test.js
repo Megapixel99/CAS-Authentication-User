@@ -17,14 +17,14 @@ const casOf = (options) => new CASAuthentication({ ...BASE, ...options });
  * on a lookalike.
  */
 const OFF_SITE = [
-  ['an absolute http URL', 'http://evil.example.com/phish'],
-  ['an absolute https URL', 'https://evil.example.com/phish'],
-  ['a protocol-relative path', '//evil.example.com/phish'],
-  ['a backslash variant', '/\\evil.example.com'],
-  ['a double backslash variant', '\\\\evil.example.com'],
+  ['an absolute http URL', 'http://bad.example.com/phish'],
+  ['an absolute https URL', 'https://bad.example.com/phish'],
+  ['a protocol-relative path', '//bad.example.com/phish'],
+  ['a backslash variant', '/\\bad.example.com'],
+  ['a double backslash variant', '\\\\bad.example.com'],
   ['a javascript scheme', 'javascript:alert(1)'],
   ['a data scheme', 'data:text/html,<script>alert(1)</script>'],
-  ['a scheme-relative URL with credentials', '//user:pass@evil.example.com'],
+  ['a scheme-relative URL with credentials', '//user:pass@bad.example.com'],
 ];
 
 OFF_SITE.forEach(([label, value]) => {
@@ -75,7 +75,7 @@ test('an off-site returnTo cannot survive a full login round trip', async () => 
     const cas = casFor(cas_server.port);
     const session = {};
     cas.bounce(makeReq({
-      session, query: { returnTo: 'https://evil.example.com/phish' }, url: '/app', path: '/app',
+      session, query: { returnTo: 'https://bad.example.com/phish' }, url: '/app', path: '/app',
     }), makeRes(), makeNext());
     assert.strictEqual(session.cas_return_to, '/app');
 
@@ -114,7 +114,7 @@ test('bounce_redirect keeps a router mount prefix', () => {
 test('a repeated returnTo is refused rather than coerced', () => {
   const req = makeReq({
     session: { cas_user: 'casuser' },
-    query: { returnTo: ['/a', 'https://evil.example.com'] },
+    query: { returnTo: ['/a', 'https://bad.example.com'] },
     url: '/authenticate',
     path: '/authenticate',
   });

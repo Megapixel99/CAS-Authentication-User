@@ -21,9 +21,9 @@ const casOf = (options) => new CASAuthentication({ ...BASE, ...options });
  * authenticated client on a bounce_redirect route is redirected straight away.
  */
 const OFF_ORIGIN_PATHS = [
-  ['a protocol-relative path', '//evil.example.com/phish'],
-  ['a backslash variant', '/\\evil.example.com'],
-  ['a backslash path with a query', '/\\evil.example.com?a=1'],
+  ['a protocol-relative path', '//bad.example.com/phish'],
+  ['a backslash variant', '/\\bad.example.com'],
+  ['a backslash path with a query', '/\\bad.example.com?a=1'],
 ];
 
 OFF_ORIGIN_PATHS.forEach(([label, value]) => {
@@ -43,7 +43,7 @@ OFF_ORIGIN_PATHS.forEach(([label, value]) => {
     casOf().login(req, res, makeNext());
     const service = new URL(res.redirects[0]).searchParams.get('service');
     assert.ok(service.startsWith('https://app.example.edu/'), `service was ${service}`);
-    assert.ok(!service.includes('evil.example.com'),
+    assert.ok(!service.includes('bad.example.com'),
       `${value} must not reach CAS as part of the service URL, got ${service}`);
   });
 
