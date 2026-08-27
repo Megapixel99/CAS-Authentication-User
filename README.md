@@ -268,7 +268,7 @@ The restriction is not tidiness. Without it, an attacker could hand a victim a l
 
 `returnTo` is not the only client-controlled value that decides where a redirect lands. The request path does too: `bounce_redirect` falls back to it when no `returnTo` is supplied, and it forms the service URL sent to CAS. A path is not automatically same-origin, because `//host` is protocol-relative and `/\host` is the variant browsers normalize into one.
 
-Request URLs are parsed with the WHATWG `URL` API against a base that cannot exist, and a path that resolves away from that base is replaced with `/`. Node's legacy `url.parse` reported both forms above as a *pathname*, so a client sent to `/\evil.example.com` on a `bounce_redirect` route was redirected off-site — with no CAS round trip involved, since an already authenticated client never reaches one. Node documents that parser as [DEP0169](https://nodejs.org/api/deprecations.html#DEP0169), noting that CVEs are not issued against it.
+Request URLs are parsed with the WHATWG `URL` API against a base that cannot exist, and a path that resolves away from that base is replaced with `/`. Node's legacy `url.parse` reported both forms above as a *pathname*, so a client sent to `/\bad.example.com` on a `bounce_redirect` route was redirected off-site — with no CAS round trip involved, since an already authenticated client never reaches one. Node documents that parser as [DEP0169](https://nodejs.org/api/deprecations.html#dep0169-insecure-urlparse), noting that CVEs are not issued against it.
 
 ### Query strings and the login round trip
 
@@ -370,7 +370,7 @@ CI runs both commands on Node 20, 22, 24 and 26. A second job covers what no tes
 
 One change affects behaviour, and it is a security fix.
 
-- **A request path that resolves to another origin no longer reaches `res.redirect`.** Request URLs are parsed with the WHATWG `URL` API rather than Node's deprecated `url.parse`, which reported `//host` and the `/\host` variant browsers normalize into it as a *pathname*. A client sent to `/\evil.example.com` on a `bounce_redirect` route was redirected off-site; such a path now resolves to `/`. This is a different input from the `returnTo` redirect fixed in 0.3.0 — `returnTo` was validated, the request path was not — and it needed no CAS round trip, since an already authenticated client is redirected before one happens. See [The request path](#the-request-path).
+- **A request path that resolves to another origin no longer reaches `res.redirect`.** Request URLs are parsed with the WHATWG `URL` API rather than Node's deprecated `url.parse`, which reported `//host` and the `/\host` variant browsers normalize into it as a *pathname*. A client sent to `/\bad.example.com` on a `bounce_redirect` route was redirected off-site; such a path now resolves to `/`. This is a different input from the `returnTo` redirect fixed in 0.3.0 — `returnTo` was validated, the request path was not — and it needed no CAS round trip, since an already authenticated client is redirected before one happens. See [The request path](#the-request-path).
 
 Nothing else is a breaking change. Three additions are worth knowing about:
 
