@@ -34,6 +34,8 @@ declare class CASAuthentication {
   readonly destroy_session: boolean;
   /** Milliseconds before a ticket validation request is abandoned. */
   readonly timeout: number;
+  /** Ceiling on the buffered CAS response body, in bytes. `0` disables it. */
+  readonly max_response_bytes: number;
   /** Whether the session id is regenerated on successful login. */
   readonly regenerate_session: boolean;
   /** Where diagnostics are reported. Defaults to `console`. */
@@ -184,10 +186,19 @@ declare namespace CASAuthentication {
      */
     destroy_session?: boolean;
     /**
-     * Milliseconds to wait for the CAS server to answer a ticket validation
-     * request before giving up. `0` waits indefinitely. Defaults to `10000`.
+     * Milliseconds allowed for a ticket validation request to complete before
+     * it is abandoned. A deadline for the whole call, not an inactivity timer:
+     * a CAS server that trickles bytes indefinitely is cut off at this budget
+     * rather than holding the client's request open. `0` waits indefinitely.
+     * Defaults to `10000`.
      */
     timeout?: number;
+    /**
+     * Largest CAS response body this will buffer, in bytes. A response beyond
+     * it fails the validation instead of being read into memory. `0` disables
+     * the check. Defaults to `1048576`.
+     */
+    max_response_bytes?: number;
     /**
      * Regenerate the session id on successful login, so a session fixed by an
      * attacker beforehand does not carry over. Application data in the session

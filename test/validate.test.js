@@ -106,12 +106,42 @@ test('SAML 1.1 rejects a SOAP envelope with no Response body', async () => {
   assert.match(err.message, /CAS authentication failed/);
 });
 
-test('SAML 1.1 attribute values without an xsi:type come back undefined', async () => {
-  // Documents current behaviour. index.js reads `attributevalue._`, which xml2js
-  // only populates when the element carries XML attributes. Real CAS servers send
-  // xsi:type, so this is a latent edge rather than a live break.
+test('SAML 1.1 attribute values without an xsi:type are read, not discarded', async () => {
+  // xml2js only populates `attributevalue._` when the element carries XML
+  // attributes, and reading it unconditionally threw away the text of every
+  // value that had none - the CAS server released the attribute and the
+  // application received undefined.
   const { err, user, attributes } = await validate(casOf('saml1.1'), fx.SAML_SUCCESS_BARE_VALUE);
   assert.strictEqual(err, null);
   assert.strictEqual(user, 'samluser');
-  assert.deepStrictEqual(attributes, { email: undefined, memberOf: [undefined, undefined] });
+  assert.deepStrictEqual(attributes, {
+    email: 'samluser@example.edu',
+    memberOf: ['staff', 'faculty'],
+  });
+});
+
+/**
+ * A CAS server that releases no attributes omits the AttributeStatement, and an
+ * attribute may carry no value. Reaching through either threw, and the catch
+ * turned the throw into a failed login - so a perfectly valid authentication was
+ * refused over the shape of the attributes attached to it. The 2.0/3.0 parser
+ * has always tolerated the equivalent, and has a test for it.
+ */
+test('SAML 1.1 success with no AttributeStatement still authenticates', async () => {
+  const { err, user, attributes } = await validate(casOf('saml1.1'),
+    fx.SAML_SUCCESS_NO_ATTR_STATEMENT);
+  assert.strictEqual(err, null);
+  assert.strictEqual(user, 'samluser');
+  assert.deepStrictEqual(attributes, {});
+});
+
+test('SAML 1.1 tolerates an attribute with no value', async () => {
+  const { err, user, attributes } = await validate(casOf('saml1.1'),
+    fx.SAML_SUCCESS_VALUELESS_ATTR);
+  assert.strictEqual(err, null);
+  assert.strictEqual(user, 'samluser');
+  assert.deepStrictEqual(attributes, {
+    email: undefined,
+    memberOf: ['staff', 'faculty'],
+  });
 });

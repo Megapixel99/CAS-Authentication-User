@@ -43,7 +43,7 @@
     "type": "git",
     "url": "git+https://github.com/Megapixel99/CAS-Authentication-User.git"
   },
-  "version": "0.4.0",
+  "version": "0.5.0",
   "scripts": {
     "test": "node --test test/*.test.js && npm run typecheck",
     "typecheck": "tsc --noEmit -p tsconfig.json"

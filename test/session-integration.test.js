@@ -118,10 +118,18 @@ test('a gateway check over real sessions redirects once and then passes through'
     const service = new URL(new URL(first.location).searchParams.get('service'));
     assert.strictEqual(service.searchParams.get(CASAuthentication.GATEWAY_QUERY_PARAM), '1');
 
-    // CAS returns the client to that service with no ticket, cookie intact.
+    // CAS returns the client to that service with no ticket, cookie intact. The
+    // service URL is the bare path plus the marker, not the URL the client
+    // asked for, so they are sent back to their own URL - which also takes the
+    // marker out of the address bar, where a bookmark of it would suppress
+    // every later check.
     const second = await get(app.port, `${service.pathname}${service.search}`, first.cookie);
-    assert.strictEqual(second.status, 200);
-    assert.deepStrictEqual(JSON.parse(second.body), { user: null });
+    assert.strictEqual(second.status, 302);
+    assert.strictEqual(second.location, '/');
+
+    const landed = await get(app.port, second.location, first.cookie);
+    assert.strictEqual(landed.status, 200);
+    assert.deepStrictEqual(JSON.parse(landed.body), { user: null });
 
     // And a later, unmarked request must not bounce again - the session holds
     // the flag now.
@@ -141,7 +149,9 @@ test('logging out re-arms a gateway check over real sessions', async () => {
     const first = await get(app.port, '/');
     const marked = new URL(new URL(first.location).searchParams.get('service'));
     const passed = await get(app.port, `${marked.pathname}${marked.search}`, first.cookie);
-    assert.strictEqual(passed.status, 200);
+    // Redirected back off the marked URL, then served from the session flag.
+    assert.strictEqual(passed.status, 302);
+    assert.strictEqual((await get(app.port, passed.location, first.cookie)).status, 200);
 
     await get(app.port, '/logout', first.cookie);
     const after = await get(app.port, '/', first.cookie);
@@ -261,7 +271,9 @@ test('a mounted gateway check returns to the full path', async () => {
     assert.strictEqual(service.pathname, '/portal/page');
 
     const second = await get(app.port, `${service.pathname}${service.search}`, first.cookie);
-    assert.strictEqual(second.status, 200);
+    assert.strictEqual(second.status, 302);
+    assert.strictEqual(second.location, '/portal/page', 'the mount prefix must survive');
+    assert.strictEqual((await get(app.port, second.location, first.cookie)).status, 200);
   } finally {
     await app.close();
   }
