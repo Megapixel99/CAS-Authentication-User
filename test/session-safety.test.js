@@ -13,12 +13,11 @@ const BASE = { cas_url: 'https://cas.example.edu/cas', service_url: 'https://app
 const casOf = (options) => new CASAuthentication({ ...BASE, ...options });
 
 /**
- * regenerate_session defaults to true because session fixation is a real attack
- * on this flow: an attacker who plants a session cookie before the victim logs
- * in still holds a handle on the authenticated session afterwards. A session
- * middleware without regenerate() cannot offer the defence - which is a
- * documented fallback, but it happened in silence, so an application that had
- * asked for the protection had no way to learn it was not getting it.
+ * regenerate_session defaults to true because an attacker who plants a session
+ * cookie before the victim logs in otherwise holds a handle on the authenticated
+ * session afterwards. A session middleware without regenerate() cannot offer the
+ * defence, and the documented fallback happened in silence, so an application
+ * that had asked for the protection could not learn it was not getting it.
  */
 test('a session middleware without regenerate() says so on the logger', async () => {
   const server = await startCasServer(() => fx.CAS2_SUCCESS);
@@ -56,11 +55,10 @@ test('no warning when regenerate_session is switched off deliberately', async ()
 });
 
 /**
- * Passport keeps the authenticated user under its own session key. cas.logout
- * cleared the keys this library writes and left that one, so a client who
- * signed in through the strategy that ships in this very package was shown the
- * CAS "you have been logged out" page while every route behind Passport carried
- * on treating them as signed in.
+ * Passport keeps the authenticated user under its own session key, which
+ * cas.logout left in place, so a client who signed in through the bundled
+ * strategy was shown the CAS logout page while every route behind Passport
+ * carried on treating them as signed in.
  */
 test('logout clears the Passport session too', () => {
   const cas = casOf();
@@ -87,11 +85,10 @@ test('logout works unchanged when Passport is not installed', () => {
 });
 
 /**
- * The strategy hands the CAS profile to the application's verify callback. A
- * callback that throws is the application's bug, but the throw used to be
- * caught by the response parser inside index.js and dropped, so Passport was
- * never told anything at all: no success, no fail, no error, and a request that
- * simply never answered.
+ * A verify callback that throws is the application's bug, but the throw used to
+ * be caught by the response parser in index.js and dropped, so Passport was told
+ * nothing at all: no success, no fail, no error, and a request that never
+ * answered.
  */
 test('a verify callback that throws reaches Passport error()', async () => {
   const server = await startCasServer(() => fx.CAS2_SUCCESS);
@@ -135,8 +132,8 @@ test('the strategy prefers req.hostname, as the middleware does', async () => {
 
 /**
  * cas_url and service_url are the two required options, and a mistake in either
- * used to surface a long way from the cause - as a request to the wrong host, or
- * as a 404 with a doubled slash in it.
+ * surfaced a long way from the cause: a request to the wrong host, or a 404 with
+ * a doubled slash in it.
  */
 test('a cas_url with a scheme that is not http or https is refused', () => {
   assert.throws(() => casOf({ cas_url: 'htps://cas.example.edu/cas' }),
@@ -174,9 +171,9 @@ test('a trailing slash on cas_url does not produce a doubled validate path', asy
 });
 
 test('the timeout values that used to fail open are refused', () => {
-  // Number(null), Number(false) and Number([]) are all 0, which is the value
-  // that means "wait for ever" - so the malformed options that slipped through
-  // were exactly the ones that disabled the timeout.
+  // Number(null), Number(false) and Number([]) are all 0, the value that means
+  // "wait for ever", so the malformed options that got through were exactly the
+  // ones that disabled the timeout.
   [null, false, [], {}, 'abc'].forEach((value) => {
     assert.throws(() => casOf({ timeout: value }), /non-negative number/,
       `timeout: ${JSON.stringify(value)} must be refused`);

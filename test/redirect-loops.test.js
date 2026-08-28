@@ -11,17 +11,15 @@ const BASE = { cas_url: 'https://cas.example.edu/cas', service_url: 'https://app
 const casOf = (options) => new CASAuthentication({ ...BASE, ...options });
 
 /**
- * Every entry point in this library can be mounted at a route of the
- * application's choosing, and two of them are documented as belonging at a
- * login route. That makes the route its own redirect target, and a redirect to
- * the current URL in the current state is a loop the browser follows until it
- * gives up. These are the loops that were actually reachable.
+ * Two entry points are documented as belonging at a login route, which makes the
+ * route its own redirect target; a redirect to the current URL in the current
+ * state is a loop the browser follows until it gives up.
  */
 
 test('login mounted as a route does not bounce an authenticated client back to CAS', () => {
-  // The README's own `app.get('/login', cas.login)`. login used to redirect to
-  // CAS unconditionally: CAS returned the client with a ticket, login ignored
-  // it and redirected to CAS again, and CAS minted another ticket every hop.
+  // The README's own `app.get('/login', cas.login)`. login redirected to CAS
+  // unconditionally, so CAS returned a ticket that login ignored, and every hop
+  // minted another one.
   const req = makeReq({ session: { cas_user: 'casuser' }, url: '/login', path: '/login' });
   const res = makeRes();
   casOf().login(req, res, makeNext());
@@ -68,11 +66,10 @@ test('login still redirects an anonymous client to CAS', () => {
 });
 
 /**
- * The gateway marker travels on the query string precisely so that a client
- * whose session does not persist can still end the check. The redirect that
- * completes a validated ticket dropped the whole query string, marker included,
- * so such a client was sent to CAS again on the very next request - a full
- * round trip per request, for ever, which is the loop the marker exists to stop.
+ * The gateway marker travels on the query string so that a client whose session
+ * does not persist can still end the check; the redirect completing a validated
+ * ticket dropped the query string, marker included, which is the loop the marker
+ * exists to stop.
  */
 test('a validated ticket keeps the gateway marker when the session did not persist', async () => {
   const server = await startCasServer(() => fx.CAS2_SUCCESS);
@@ -96,9 +93,9 @@ test('a validated ticket keeps the gateway marker when the session did not persi
 });
 
 test('a gateway check keeps the visitor query string across the CAS round trip', () => {
-  // The service URL sent to CAS deliberately carries no application query
-  // string, but the destination remembered for the client must, or every
-  // visitor to a gateway route silently loses their parameters.
+  // The service URL sent to CAS carries no application query string, but the
+  // destination remembered for the client must, or every visitor to a gateway
+  // route loses their parameters.
   const req = makeReq({ url: '/browse?q=cats&page=3', path: '/browse' });
   const res = makeRes();
   casOf().gateway(req, res, makeNext());
@@ -109,9 +106,8 @@ test('a gateway check keeps the visitor query string across the CAS round trip',
 });
 
 test('a fragment in returnTo is kept for the client and withheld from CAS', () => {
-  // CAS appends ?ticket= to the service URL; with a fragment in it the ticket
-  // lands inside the fragment, where the application never sees it, and the
-  // client arrives unauthenticated to be sent to CAS again.
+  // CAS appends ?ticket= to the service URL, so a fragment in it puts the ticket
+  // inside the fragment, where the application never sees it.
   const req = makeReq({ query: { returnTo: '/reports#summary' }, url: '/login', path: '/login' });
   const res = makeRes();
   casOf().login(req, res, makeNext());
@@ -151,8 +147,7 @@ test('a session store that cannot save fails the login instead of looping', asyn
 
 test('a gateway check restores the visitor query string when CAS returns no ticket', () => {
   // CAS returns the client to the bare service URL, which is not where they
-  // asked to be: the check is meant to be invisible, and it was eating every
-  // visitor's parameters on the way past.
+  // asked to be; the check is meant to be invisible.
   const cas = casOf();
   const session = { cas_return_to: '/browse?q=cats&page=3' };
   const req = makeReq({

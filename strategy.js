@@ -121,10 +121,8 @@ Strategy.prototype.authenticate = function (req, options) {
   }
 
   this.cas._validateTicket({
-    // req.hostname first, as the core middleware does: Express 4 removed the
-    // port from req.host and Express 5 deprecated it outright, so req.host
-    // alone is undefined on a current Express and the SAML RequestID falls back
-    // to the service hostname.
+    // req.hostname first, as the core middleware does: req.host alone is
+    // undefined on a current Express, so the SAML RequestID lost its label.
     ticket, service: this._serviceUrl(req), host: req.hostname || req.host,
   }, (err, user, attributes) => {
     if (err) {
@@ -164,12 +162,10 @@ Strategy.prototype.authenticate = function (req, options) {
       }
     };
 
-    // A verify callback that throws is the application's bug, but it is not
-    // this library's business to hide it: the throw used to be caught by the
-    // response parser inside index.js, mislabelled as an unreadable CAS
-    // response, and dropped - so the request hung with no response and no
-    // usable diagnostic. error() is the channel Passport provides for exactly
-    // this, and it reaches the application's error handler.
+    // A verify callback that throws is the application's bug, and hiding it is
+    // not this library's business: the throw used to be caught by the response
+    // parser in index.js and dropped, hanging the request. error() is the
+    // channel Passport provides for it.
     try {
       if (this._passReqToCallback) {
         this._verify(req, profile, verified);

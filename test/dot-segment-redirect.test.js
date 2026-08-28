@@ -12,18 +12,11 @@ const casOf = (options) => new CASAuthentication({ ...BASE, ...options });
 
 /**
  * The third instance of this package's oldest bug, and the one the previous two
- * fixes could not have caught.
- *
- * 0.3.0 validated `returnTo`; 0.4.0 parsed the request URL and rejected
- * anything resolving to another origin. Both checks look at the value as it
- * arrives. This one is manufactured by the parser itself: `/..//bad.example.com`
- * resolves its dot segment away and leaves *this* origin with a pathname of
- * `//bad.example.com`. The origin check passes, and what reaches res.redirect is
- * protocol-relative - so the browser leaves the site.
- *
- * `/../\bad.example.com` is the sharpest illustration: normalisation produces
- * the exact `/\host` shape isSafeReturnTo rejects on sight, by a route that
- * check never sees.
+ * fixes could not have caught: 0.3.0 validated `returnTo` and 0.4.0 rejected a
+ * request URL resolving to another origin, and both check the value as it
+ * arrives. This one is manufactured by the parser, since `/..//bad.example.com`
+ * resolves its dot segment away and leaves this origin with a pathname of
+ * `//bad.example.com`, which reaches res.redirect protocol-relative.
  */
 const NORMALISED_OFF_ORIGIN = [
   ['a dot segment before a double slash', '/..//bad.example.com'],
@@ -59,7 +52,7 @@ NORMALISED_OFF_ORIGIN.forEach(([label, value]) => {
 
   test(`the post-login redirect refuses ${label}`, async () => {
     // The dangerous hop: the victim authenticates at the genuine CAS server and
-    // is then handed to the attacker's site by the redirect that completes it.
+    // is handed to the attacker's site by the redirect that completes it.
     const server = await startCasServer(() => fx.CAS2_SUCCESS);
     try {
       const cas = casFor(server.port);

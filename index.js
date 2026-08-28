@@ -65,13 +65,11 @@ const REQUEST_URL_BASE = 'http://cas-authentication.invalid';
  * callers then handed to res.redirect - an off-site redirect from a value the
  * client controls. Reading the origin back is what closes that.
  *
- * Reading the origin is necessary but not sufficient, which is what made this a
- * third instance of the same bug rather than the end of it. `//host` does point
- * at another origin and is caught by that check, but `/..//host` does not: the
- * dot segment is resolved away, and what the parser hands back is this origin
- * with a *pathname* of `//host`. That pathname is protocol-relative all over
- * again once res.redirect writes it into a Location header, so the pathname has
- * to be checked as well - the origin check never sees it.
+ * Reading the origin is necessary and not sufficient. `//host` does resolve to
+ * another origin and is caught by that check; `/..//host` does not, because the
+ * dot segment resolves away and leaves this origin with a *pathname* of
+ * `//host`, which is protocol-relative again once res.redirect writes it into a
+ * Location header.
  */
 function parseRequestUrl(value) {
   let parsed;
@@ -84,8 +82,7 @@ function parseRequestUrl(value) {
     return null;
   }
   // `/..//host`, `/%2e%2e//host` and `/a/../../..//host` all normalise to this,
-  // as does `/../\host` - which is the browser-normalised `/\host` shape that
-  // isSafeReturnTo rejects outright, arriving by a route that check never sees.
+  // as does `/../\host`, which produces the shape isSafeReturnTo rejects on sight.
   if (parsed.pathname.charAt(1) === '/' || parsed.pathname.charAt(1) === '\\') {
     return null;
   }
@@ -124,10 +121,9 @@ function serviceHostname(service) {
 /**
  * The text of a SAML 1.1 <AttributeValue>.
  *
- * xml2js gives an object with the text on `_` when the element carries an
- * attribute - which real CAS servers do, via `xsi:type` - and a plain string
- * when it does not. Reading `._` unconditionally returned undefined for the
- * second shape, discarding a value the CAS server did release.
+ * xml2js puts the text on `_` when the element carries an attribute (real CAS
+ * servers send `xsi:type`) and gives a plain string when it does not, so reading
+ * `._` unconditionally discarded a value the CAS server had released.
  */
 function samlAttributeValue(value) {
   if (value === null || value === undefined) {
@@ -137,14 +133,11 @@ function samlAttributeValue(value) {
 }
 
 /**
- * The username out of a parsed CAS response, or null if there isn't one.
+ * The username out of a parsed CAS response, or null if there is none.
  *
- * Normally a string, but xml2js represents an element carrying an attribute or
- * a child as an object with the text on `_` - so a CAS server that sends
- * `<cas:user format="upn">casuser</cas:user>` yielded an *object* where every
- * caller, and both .d.ts files, promise a string. That object went on to be
- * stored as the session username and compared against, where it stringifies to
- * `[object Object]`.
+ * xml2js represents an element carrying an attribute as an object with the text
+ * on `_`, so `<cas:user format="upn">` yielded an object where both .d.ts files
+ * promise a string, and `[object Object]` became the session username.
  */
 function casUsername(value) {
   if (typeof value === 'string') {
@@ -160,8 +153,8 @@ function casUsername(value) {
  * Escapes text interpolated into the SAML 1.1 SOAP request.
  *
  * The ticket arrives from the client and the host from a request header, and
- * both were written into the XML raw - so either could close the element it sat
- * in and add markup of its own to the document handed to the CAS server.
+ * written raw either one could close its element and add markup of its own to
+ * the document handed to the CAS server.
  */
 function escapeXml(value) {
   return String(value)
@@ -177,9 +170,8 @@ function escapeXml(value) {
  * caller can tell it apart from CAS actually rejecting the ticket.
  *
  * Both used to be logged as "CAS rejected the ticket", so a CAS server that was
- * down, misconfigured or answering with a proxy error page was indistinguishable
- * in the log from a user presenting a bad ticket - and the first is an
- * operational incident while the second is a Tuesday.
+ * down or answering with a proxy error page read in the log exactly like a user
+ * presenting a bad ticket.
  */
 function badResponse() {
   const err = new Error('Response from CAS server was bad.');
@@ -190,11 +182,9 @@ function badResponse() {
 /**
  * A path with any fragment removed.
  *
- * A fragment is meaningful to the browser and meaningless to CAS: sent as part
- * of the service URL it comes back with `?ticket=` *inside* the fragment, where
- * the application never sees it, so the client arrives unauthenticated and is
- * sent to CAS again. The fragment is kept for the final redirect and dropped
- * from the service URL only.
+ * A fragment means nothing to CAS: sent on the service URL, it comes back with
+ * `?ticket=` inside the fragment, where the application cannot read it. The
+ * fragment is kept for the final redirect and dropped from the service URL.
  */
 function stripFragment(value) {
   const hash = value.indexOf('#');
@@ -361,13 +351,11 @@ function CASAuthentication(options) {
           this.logger.error('CAS response could not be read: ', readErr);
           failure = new Error('CAS authentication failed.');
         }
-        // Deliberately outside the try. Everything downstream of this callback
-        // is the application's - the session store, res.redirect, a Passport
-        // verify callback - and running it inside the try meant an exception
-        // from any of them was caught here, mislabelled as an unreadable CAS
-        // response, and answered with a second callback that the settled guard
-        // in _validateTicket then dropped. The client's request never got a
-        // response at all.
+        // Outside the try deliberately. Everything downstream of this callback
+        // belongs to the application (the session store, res.redirect, a Passport
+        // verify callback), and inside the try an exception from any of them was
+        // caught here, reported as an unreadable CAS response, and dropped by the
+        // settled guard, leaving the request with no response at all.
         return callback(failure, user, attributes);
       });
     };
@@ -393,13 +381,10 @@ function CASAuthentication(options) {
             failure = new Error(`CAS authentication failed (${success}).`);
           } else {
             attributes = {};
-            // A CAS server that releases no attributes omits the whole
-            // AttributeStatement, and an attribute may carry no value at all.
-            // Reaching through either used to throw, which the catch below
-            // turned into a failed login - so a perfectly good authentication
-            // was refused over the shape of the attributes attached to it. The
-            // 2.0/3.0 parser has always tolerated a response with no
-            // attributes; this brings SAML into line with it.
+            // A server releasing no attributes omits the AttributeStatement,
+            // and an attribute may carry no value; reaching through either threw,
+            // and the catch below turned that into a failed login. The 2.0/3.0
+            // parser has always tolerated the equivalent.
             const statement = samlResponse.assertion.attributestatement;
             let attributesArray = statement ? statement.attribute : [];
             if (attributesArray === undefined || attributesArray === null) {
@@ -440,11 +425,9 @@ function CASAuthentication(options) {
     // typo surfaced later as a request to an undefined host. Say so here.
     throw new Error(`CAS Authentication was given a cas_url that is not a valid URL ("${this.cas_url}").`);
   }
-  // Anything that is not http: was silently treated as https:, so a typo like
-  // `htps://cas.example.edu` validated tickets over TLS quite happily while
-  // sending the browser to a login URL it cannot navigate to - and
-  // `javascript:...` parses, leaving no hostname at all and a request to
-  // localhost. Neither is a URL a CAS server can live at.
+  // Anything that is not http: was treated as https:, so `htps://cas.example.edu`
+  // validated tickets over TLS while sending the browser to a login URL it cannot
+  // navigate to; `javascript:...` parses with no hostname at all.
   if (parsed_cas_url.protocol !== 'http:' && parsed_cas_url.protocol !== 'https:') {
     throw new Error('CAS Authentication requires cas_url to be an http or https URL, got '
       + `"${this.cas_url}".`);
@@ -459,14 +442,12 @@ function CASAuthentication(options) {
     ? Number(parsed_cas_url.port)
     : (parsed_cas_url.protocol === 'http:' ? 80 : 443);
   // A cas_url of `https://host/` leaves a pathname of `/`, which concatenated
-  // with the validate URI gives `//p3/serviceValidate`. Harmless-looking, and
-  // some CAS deployments 404 on it.
+  // with the validate URI gives `//p3/serviceValidate`; some deployments 404 on it.
   this.cas_path = parsed_cas_url.pathname === '/' ? '' : parsed_cas_url.pathname.replace(/\/$/, '');
 
   // service_url was the one required option nothing checked, though every
-  // redirect and every service value is built by concatenating a path onto it.
-  // A trailing slash produced `https://app.example.com//dashboard`, which is a
-  // 404 the application author sees long before they see this line.
+  // redirect and every service value concatenates a path onto it; a trailing
+  // slash produced `https://app.example.com//dashboard`.
   let parsed_service_url;
   try {
     parsed_service_url = new URL(options.service_url);
@@ -486,17 +467,14 @@ function CASAuthentication(options) {
   this.dev_mode_user = options.dev_mode_user !== undefined ? options.dev_mode_user : '';
   this.dev_mode_info = options.dev_mode_info !== undefined ? options.dev_mode_info : {};
 
-  // Dev mode authenticates every request as dev_mode_user without contacting
-  // CAS at all, so it is the one option that must never reach production
-  // quietly. It did: nothing was written to any channel, and `is_dev_mode:
-  // 'false'` - the shape an environment variable arrives in - is a non-empty
-  // string, so it switched dev mode on.
+  // Dev mode authenticates every request as dev_mode_user without contacting CAS,
+  // so it must never reach production quietly. It did: nothing reached any
+  // channel, and `is_dev_mode: 'false'` (the shape an environment variable
+  // arrives in) is a non-empty string, so it switched dev mode on.
   if (this.is_dev_mode) {
     if (typeof this.dev_mode_user !== 'string' || this.dev_mode_user === '') {
-      // The library refuses this exact value from a real CAS server, because a
-      // blank username leaves the client looking anonymous to the application
-      // for ever. Accepting it from the config was the same bug with a friendly
-      // face: authenticated according to the middleware, anonymous according to
+      // The library refuses this value from a real CAS server: a blank username
+      // is authenticated as far as the middleware is concerned and anonymous to
       // every `if (req.session.cas_user)` in the application.
       throw new Error('CAS Authentication requires a non-empty dev_mode_user when '
         + 'is_dev_mode is set, since a blank username authenticates as nobody.');
@@ -514,9 +492,8 @@ function CASAuthentication(options) {
   // the connection and then never answers would otherwise hold the client's
   // request open forever. 0 disables the timeout.
   // Only a number, or a string that is one. `Number()` alone turned null, false
-  // and [] into 0, which is the value that means "wait for ever" - so the
-  // malformed values that slipped through were the ones that disabled the
-  // timeout, while 'abc' and {} threw. The failure modes were exactly inverted.
+  // and [] into 0, the value that means "wait for ever", so the malformed values
+  // that got through were exactly the ones that disabled the timeout.
   if (options.timeout !== undefined
     && typeof options.timeout !== 'number' && typeof options.timeout !== 'string') {
     throw new Error('CAS Authentication requires timeout to be a non-negative number.');
@@ -527,9 +504,9 @@ function CASAuthentication(options) {
   }
   this.timeout = timeout;
 
-  // The CAS response is buffered in memory before it is parsed, so it needs a
-  // ceiling. Generous next to any real response - a SAML assertion with a large
-  // attribute release is tens of kilobytes - and 0 disables it.
+  // The CAS response is buffered before it is parsed, so it needs a ceiling. The
+  // default is generous next to a SAML assertion with a large attribute release
+  // (tens of kilobytes); 0 disables it.
   if (options.max_response_bytes !== undefined
     && (typeof options.max_response_bytes !== 'number'
       || !Number.isFinite(options.max_response_bytes)
@@ -559,10 +536,7 @@ function CASAuthentication(options) {
     throw new Error('CAS Authentication requires logger to be an object with an error method.');
   }
 
-  // Said once, at construction, on the one channel a logger is required to
-  // have. A deployment that reaches production with dev mode on authenticates
-  // every visitor as the same user without ever contacting CAS, and until now
-  // it did so without saying a word.
+  // Said once, at construction, on the one channel a logger is required to have.
   if (this.logger_warning_dev_mode) {
     this.logger.error(this.logger_warning_dev_mode);
     delete this.logger_warning_dev_mode;
@@ -637,22 +611,17 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
       const returnTo = req.query && req.query.returnTo;
       const here = requestPathWithQuery(req);
       const target = isSafeReturnTo(returnTo) ? returnTo : here;
-      // Except that "where the client already is" is this very route, which is
-      // a redirect to itself: the browser follows it, arrives in exactly the
-      // same state, and is redirected again for ever. bounce_redirect is meant
-      // to be mounted at a login route precisely so that a client can be sent
-      // somewhere else afterwards, so an absent or rejected returnTo has no
-      // destination to fall back to and the site root is the only safe answer.
+      // Except that "where the client already is" is this route: the redirect
+      // returns the client here in the same state, to be redirected again.
+      // bounce_redirect exists to send a client somewhere else, so an absent or
+      // rejected returnTo has no destination and the site root is what is left.
       if (target !== here) {
         req.session.cas_return_to = target;
         res.redirect(target);
       } else if (requestUrl(req) === '/') {
-        // Already at the root, so there is nowhere left to send them: a
-        // redirect here would be the same loop by another name. Hand the
-        // request to the application instead, authenticated. Note the test is
-        // on the URL the client actually sent, not on `here` - a path that was
-        // rejected as off-origin also collapses to `/`, and that one has
-        // somewhere to go.
+        // Nowhere left to send them, so the request is handed to the
+        // application instead. The test is on the URL the client sent, not on
+        // `here`: a path rejected as off-origin also collapses to `/`.
         next();
       } else {
         req.session.cas_return_to = '/';
@@ -688,13 +657,11 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
   // unauthenticated rather than being bounced to a login form.
   else if (authType === AUTH_TYPE.GATEWAY) {
     if (this._gatewayAlreadyChecked(req)) {
-      // CAS has just returned this client without a ticket, so they have no
-      // single sign-on session. They are also standing on the bare service URL
-      // rather than the page they asked for, because the service URL carries no
-      // query string of the application's own - so a visitor to
-      // `/browse?q=cats` was silently left on `/browse`, having lost their
-      // parameters to a check that is supposed to be invisible. The session
-      // remembers where they were going; send them back there.
+      // CAS has returned this client without a ticket, so they hold no single
+      // sign-on session, and they are standing on the bare service URL rather
+      // than the page they asked for: a visitor to `/browse?q=cats` was left on
+      // `/browse` by a check that is supposed to be invisible. The session
+      // remembers where they were going.
       const destination = req.session && req.session.cas_return_to;
       if (req.query && req.query[GATEWAY_QUERY_PARAM]
         && destination && destination !== this._returnPathForRequest(req)) {
@@ -718,8 +685,7 @@ CASAuthentication.prototype._handle = function (req, res, next, authType) {
     }
   }
   // Otherwise, redirect the user to the CAS login. Straight to _redirectToCas
-  // rather than through login(), which is now an entry point in its own right
-  // and routes back through here - that would recurse.
+  // rather than through login(), which routes back through here and would recurse.
   else {
     this._resetUserType(req);
     this._redirectToCas(req, res, false);
@@ -749,8 +715,7 @@ CASAuthentication.prototype._returnToFor = function (req, keepQuery) {
     }
   }
   // With no returnTo the request itself is the destination, and the client's own
-  // query string is part of what they asked for - so it is kept for the redirect
-  // home and dropped from the service URL. See _redirectToCas.
+  // query string is part of it; the service URL drops it. See _redirectToCas.
   return keepQuery ? this._returnPathForRequest(req) : requestPath(req);
 };
 
@@ -810,17 +775,13 @@ CASAuthentication.prototype._serviceForRequest = function (req) {
  * asked for, minus the spent ticket.
  *
  * The ticket is the only parameter dropped, and the rest are preserved byte for
- * byte rather than re-encoded, because this doubles as the service value CAS
- * has to match exactly.
+ * byte rather than re-encoded, because this doubles as the service value CAS has
+ * to match exactly.
  *
- * It is also the fallback destination once a ticket has been validated, and
- * dropping the query there was its own bug: `gateway` mode marks its return hop
- * with `cas_gateway=1` on the query string, so a client whose session does not
- * persist lost the one marker that ends the check and was sent to CAS again on
- * every single request - a redirect loop, where the whole point of the marker
- * is to bound it. The same lost query took the visitor's own parameters with
- * it, so a `?q=cats` page silently became `?`-less for everyone passing a
- * gateway route.
+ * It is also the destination once a ticket has been validated, and dropping the
+ * query there cost gateway mode the `cas_gateway=1` marker that ends the check:
+ * a client whose session does not persist was sent to CAS on every request, and
+ * every visitor to a gateway route lost their own parameters with it.
  */
 CASAuthentication.prototype._returnPathForRequest = function (req) {
   const parsed = parseRequestUrl(requestUrl(req));
@@ -846,12 +807,10 @@ CASAuthentication.prototype._redirectToCas = function (req, res, useGateway) {
   // Save the return URL in the session. If an explicit return URL is set as a
   // query parameter, use that. Otherwise, just use the URL from the request.
   req.session.cas_return_to = this._returnToFor(req, true);
-  // The service URL is deliberately not the same value. It carries no query
-  // string of the application's own, so page parameters are never handed to the
-  // CAS server or written to its access logs, and no fragment, which CAS would
-  // return with `?ticket=` buried inside it where the application cannot read
-  // it. The destination above keeps both, and the session carries it across the
-  // round trip.
+  // The service URL is deliberately not that value: it carries no query string
+  // of the application's own (page parameters are never handed to CAS, nor
+  // written to its access logs) and no fragment, which would come back with
+  // `?ticket=` buried inside it. The session carries the full destination.
   let service = this.service_url + stripFragment(this._returnToFor(req, false));
   const query = {};
   // The CAS protocol gives renew precedence when both are supplied, so there is
@@ -873,18 +832,12 @@ CASAuthentication.prototype._redirectToCas = function (req, res, useGateway) {
  * A login endpoint: sends the client to CAS, and completes the round trip when
  * CAS sends them back.
  *
- * This is mounted as a route (`app.get('/login', cas.login)`), which makes the
- * route its own service URL - CAS returns the client to it carrying a ticket.
- * Redirecting unconditionally to CAS, as this used to, meant that ticket was
- * never validated: the client was sent straight back to CAS, which issued
- * another one, for ever. A client with a single sign-on session could not
- * escape the loop, and every hop cost the CAS server a service ticket.
- *
- * So it handles all three states, which is what _handle already does for
- * bounce_redirect: a ticket in the query is validated, a client who is already
- * authenticated is redirected onward rather than bounced to CAS again, and
- * anyone else is sent to the login form. `returnTo` decides where the first two
- * land; without one they go to the site root.
+ * Mounted as a route (`app.get('/login', cas.login)`), which makes the route its
+ * own service URL, so CAS returns the client to it carrying a ticket.
+ * Redirecting unconditionally to CAS, as this used to, never validated that
+ * ticket: the client went straight back to CAS, which issued another one, and
+ * every hop cost a service ticket. It now handles all three states, as _handle
+ * already does for bounce_redirect.
  */
 CASAuthentication.prototype.login = function (req, res, next) {
   this._handle(req, res, next, AUTH_TYPE.BOUNCE_REDIRECT);
@@ -899,11 +852,9 @@ CASAuthentication.prototype.logout = function (req, res, next) {
   // Destroy the entire session if the option is set.
   if (this.destroy_session) {
     if (typeof req.session.destroy !== 'function') {
-      // regenerate is probed before use a few lines down in _establishSession;
-      // destroy was not, so a session middleware without one - cookie-session,
-      // or a hand-rolled layer - answered logout with a raw TypeError 500 and
-      // left the user logged in. Fall back to clearing the keys this library
-      // knows about, which is what the option's other branch does anyway.
+      // regenerate is probed before use in _establishSession; destroy was not,
+      // so a session middleware without one answered logout with a TypeError 500
+      // and left the user logged in. Fall back to the other branch's behaviour.
       this.logger.error('destroy_session is set but the session has no destroy method; '
         + 'clearing the CAS session keys instead.');
       this._clearSessionKeys(req);
@@ -911,8 +862,7 @@ CASAuthentication.prototype.logout = function (req, res, next) {
       return;
     }
     // The redirect used to be sent without waiting, so a store that failed to
-    // delete the record still told the client the logout had worked - and the
-    // session it could not delete was still valid. Wait, and report.
+    // delete the record still told the client the logout had worked.
     req.session.destroy((err) => {
       if (err) {
         this.logger.error('Session store failed to destroy the session on logout: ', err);
@@ -929,8 +879,7 @@ CASAuthentication.prototype.logout = function (req, res, next) {
   this._clearSessionKeys(req);
 
   // Persist the cleared session before the client is sent anywhere, so a store
-  // that cannot write says so here rather than leaving a logged-out user with a
-  // session record that still names them.
+  // that cannot write says so rather than leaving a record that still names them.
   if (typeof req.session.save === 'function') {
     req.session.save((err) => {
       if (err) {
@@ -954,13 +903,10 @@ CASAuthentication.prototype.logout = function (req, res, next) {
  * application's own keys alone. The counterpart to destroy_session.
  */
 CASAuthentication.prototype._clearSessionKeys = function (req) {
-  // Passport keeps the logged-in user under its own session key, which this
-  // library does not own and cannot clear by hand. A client who signed in
-  // through the strategy that ships in this package was therefore shown the CAS
-  // "you have been logged out" page while req.user, and every route behind
-  // ensureAuthenticated, carried on as before. req.logout is Passport's own way
-  // to undo that; it only exists when Passport is installed, and 0.6 requires
-  // the callback that 0.5 ignores.
+  // Passport keeps the logged-in user under its own session key, so a client who
+  // signed in through the bundled strategy was shown the CAS logout page while
+  // req.user carried on as before. req.logout exists only when Passport is
+  // installed, and 0.6 requires the callback that 0.5 ignores.
   if (typeof req.logout === 'function') {
     try {
       req.logout(() => {});
@@ -1043,10 +989,8 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       + '  <SOAP-ENV:Header/>\n'
       + '  <SOAP-ENV:Body>\n'
       + '    <samlp:Request xmlns:samlp="urn:oasis:names:tc:SAML:1.0:protocol" MajorVersion="1"\n'
-      // Both interpolations are escaped: the ticket comes from the client's
-      // query string and the host from a request header, and written raw either
-      // one could close its element and add markup of its own to the document
-      // the CAS server is about to parse.
+      // Escaped: the ticket comes from the client's query string and the host
+      // from a request header.
       + `      MinorVersion="1" RequestID="_${escapeXml(request_host)}.${now.getTime()}"\n`
       + `      IssueInstant="${now.toISOString()}">\n`
       + '      <samlp:AssertionArtifact>\n'
@@ -1073,10 +1017,8 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
         return;
       }
       body += chunk;
-      // A CAS response is a few kilobytes. Without a cap, a server that answers
-      // with an endless body - or one that has been made to - is buffered into
-      // this process until it runs out of memory, and the inactivity timeout
-      // below never fires because data keeps arriving.
+      // A CAS response is a few kilobytes. Without a cap, a server answering with
+      // an endless body is buffered into this process until memory runs out.
       if (this.max_response_bytes > 0 && Buffer.byteLength(body) > this.max_response_bytes) {
         oversized = true;
         request.destroy(new Error(
@@ -1088,11 +1030,9 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
       if (oversized) {
         return;
       }
-      // A CAS server that is down, broken or behind a proxy answers with an
-      // error status and an HTML body. Parsing that yields "authentication
-      // failed", which was then logged as CAS rejecting the ticket - so an
-      // outage and a genuinely bad ticket were indistinguishable in the log and
-      // to the client. The status says which, so read it.
+      // A CAS server that is down or behind a proxy answers with an error status
+      // and an HTML body, which parses as "authentication failed" and was logged
+      // as CAS rejecting the ticket. The status says which it was.
       if (response.statusCode < 200 || response.statusCode >= 300) {
         const status = new Error(
           `CAS server answered ticket validation with HTTP ${response.statusCode}.`,
@@ -1111,10 +1051,8 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
         }
         // CAS reported success without a usable username. Storing an empty
         // string would leave the client looking unauthenticated on every later
-        // request, which loops between the application and CAS indefinitely.
-        // A non-string is just as unusable: xml2js represents an element that
-        // carries an attribute as an object, so `<cas:user format="upn">` came
-        // through as one, and `[object Object]` became the session username.
+        // request, which loops between the application and CAS indefinitely; a
+        // non-string is just as unusable. See casUsername.
         const name = casUsername(user);
         if (name === null || name.trim() === '') {
           const blank = new Error('CAS authentication succeeded without a username.');
@@ -1137,12 +1075,10 @@ CASAuthentication.prototype._validateTicket = function (params, callback) {
   });
 
   if (this.timeout > 0) {
-    // A deadline for the whole call, not the socket-inactivity timer this used
-    // to be. request.setTimeout() only fires when nothing arrives for the
-    // interval, so a CAS server dribbling one byte at a time reset it for ever:
-    // the timeout an application set as its budget never fired, and the
-    // client's request stayed open indefinitely - including on gateway routes,
-    // which are documented never to block. Destroying the request is what turns
+    // A deadline for the whole call, not the socket-inactivity timer this used to
+    // be: request.setTimeout() only fires when nothing arrives for the interval,
+    // so a CAS server sending one byte at a time reset it indefinitely and the
+    // budget an application set never fired. Destroying the request is what turns
     // the deadline into an error the caller sees.
     const deadline = setTimeout(() => {
       request.destroy(new Error(`CAS request timed out after ${this.timeout}ms.`));
@@ -1205,11 +1141,9 @@ CASAuthentication.prototype.validateTicket = function (params) {
  */
 CASAuthentication.prototype._establishSession = function (req, user, attributes, callback) {
   const store = () => {
-    // The session can be gone by the time a CAS round trip returns - destroyed
-    // by another request on the same session, or by an application that logs
-    // out concurrently. Writing to it threw from inside an HTTP response
-    // handler, where there is no request left to fail: the process died on an
-    // uncaught TypeError, or hung.
+    // The session can be gone by the time a CAS round trip returns, destroyed by
+    // another request on the same session; writing to it then threw from inside
+    // an HTTP response handler, where there is no request left to fail.
     if (!req.session) {
       callback(new Error('The session was destroyed while the CAS ticket was being validated.'));
       return;
@@ -1219,12 +1153,10 @@ CASAuthentication.prototype._establishSession = function (req, user, attributes,
     if (this.session_info) {
       req.session[this.session_info] = attributes || {};
     }
-    // Write the authenticated session before the client is redirected. Without
-    // this the redirect races the store: express-session saves when the
-    // response ends, so a store that rejects the write did so after the browser
-    // had already been sent on, which arrived back with no session, was bounced
-    // to CAS, authenticated again - and looped, with nothing on the logger to
-    // say why.
+    // Write the authenticated session before the client is redirected. Otherwise
+    // the redirect races the store (express-session saves when the response
+    // ends), so a rejected write reached the browser as a login loop with
+    // nothing on the logger to say why.
     if (typeof req.session.save === 'function') {
       req.session.save((err) => {
         if (err) {
@@ -1240,10 +1172,9 @@ CASAuthentication.prototype._establishSession = function (req, user, attributes,
   };
 
   if (!this.regenerate_session || !req.session || typeof req.session.regenerate !== 'function') {
-    // Session fixation is the whole reason regenerate_session defaults to true,
-    // so falling back to storing in place is a real reduction in protection -
-    // and it happened silently, leaving an application that had asked for the
-    // defence without it and with no way to find out.
+    // Session fixation is why regenerate_session defaults to true, so falling
+    // back to storing in place is a real reduction in protection; it happened
+    // silently, so an application that had asked for the defence could not tell.
     if (this.regenerate_session && req.session && typeof req.session.regenerate !== 'function') {
       this.logger.error('The session middleware in use has no regenerate() method, so the '
         + 'session id cannot be rotated on login and this application is open to session '
@@ -1294,24 +1225,22 @@ CASAuthentication.prototype._handleTicket = function (req, res, next, authType) 
     }
     this._establishSession(req, user, attributes, (sessionErr) => {
       if (sessionErr) {
-        // The session could not be established, so the client is not logged in
-        // however the validation went. Hand it to Express rather than
-        // redirecting them into a loop that cannot terminate.
+        // However the validation went, the client is not logged in, so this goes
+        // to Express rather than into a redirect loop that cannot terminate.
         next(sessionErr);
         return;
       }
       // cas_return_to is missing if the session did not survive the round trip,
-      // or if the client arrived at a ticket URL directly. Falling back to the
-      // request itself lands them in the right place, minus the spent ticket -
-      // and keeping the rest of the query is what lets a gateway check that has
-      // lost its session still find its cas_gateway marker and terminate.
+      // or if the client arrived at a ticket URL directly. The request itself
+      // lands them in the right place, minus the spent ticket; keeping the rest
+      // of the query is what lets a session-less gateway check terminate.
       const destination = (req.session && req.session.cas_return_to)
         || this._returnPathForRequest(req);
       try {
         res.redirect(destination);
       } catch (redirectErr) {
-        // Application territory: a res.redirect that throws used to be caught
-        // by the response parser and dropped, hanging the request for ever.
+        // A res.redirect that throws used to be caught by the response parser
+        // and dropped, hanging the request.
         next(redirectErr);
       }
     });

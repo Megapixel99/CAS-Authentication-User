@@ -8,17 +8,13 @@ const {
 const fx = require('./fixtures.js');
 
 /**
- * The response parsers used to run the callback *inside* their own try/catch,
- * which meant the try was not guarding the parse at all - it was guarding
- * everything the application does after a successful login. An exception from
- * the session store, from res.redirect or from a Passport verify callback was
- * caught here, reported as an unreadable CAS response, and answered with a
- * second callback that the double-callback guard then dropped on the floor.
- *
- * The visible result was a request that never received a response: no error, no
- * status, no log line that named the real cause. On CAS 1.0, which has no
- * try/catch, the same throw escaped as an uncaught exception and took the
- * process with it.
+ * The response parsers ran the callback inside their own try/catch, so the try
+ * was not guarding the parse: it was guarding everything the application does
+ * after a successful login. An exception from the session store, from
+ * res.redirect or from a Passport verify callback was caught there, reported as
+ * an unreadable CAS response, and dropped by the double-callback guard, leaving
+ * a request with no response and no log line naming the cause. On CAS 1.0, which
+ * has no try/catch, the same throw took the process with it.
  */
 ['1.0', '2.0', '3.0', 'saml1.1'].forEach((version) => {
   const body = {
@@ -51,9 +47,8 @@ const fx = require('./fixtures.js');
   test(`CAS ${version}: a session destroyed mid-validation is reported, not swallowed`, async () => {
     let req;
     // Another request logs this session out while the CAS round trip is in
-    // flight - so the session is there when the middleware checks for it and
-    // gone by the time the answer comes back. Writing to it then threw from
-    // inside an HTTP response handler, where there is no request left to fail.
+    // flight, so the session is there when the middleware checks for it and gone
+    // when the answer comes back.
     const server = await startCasServer(() => {
       delete req.session;
       return body;
@@ -124,9 +119,8 @@ test('a response larger than max_response_bytes is refused rather than buffered'
 });
 
 /**
- * timeout was a socket-inactivity timer, so a server that sent a byte every so
- * often reset it for ever and the request the application had given a budget of
- * one second stayed open indefinitely.
+ * timeout was a socket-inactivity timer, so a server sending a byte every so
+ * often reset it indefinitely and the budget never applied.
  */
 test('timeout is a deadline, not an inactivity timer', async () => {
   const dribbler = require('http').createServer((req, res) => {
@@ -152,9 +146,9 @@ test('timeout is a deadline, not an inactivity timer', async () => {
 });
 
 test('a username that arrives as an element with attributes is read, not stringified', async () => {
-  // xml2js represents <cas:user format="upn">casuser</cas:user> as an object.
-  // `String(user)` made that `[object Object]`, which then became the session
-  // username, while both .d.ts files promise a string.
+  // xml2js represents <cas:user format="upn">casuser</cas:user> as an object, and
+  // `String(user)` made that `[object Object]` in the session, while both .d.ts
+  // files promise a string.
   const server = await startCasServer(() => `<cas:serviceResponse xmlns:cas="http://www.yale.edu/tp/cas">
   <cas:authenticationSuccess>
     <cas:user format="upn">casuser</cas:user>
