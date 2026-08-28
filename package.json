@@ -6,11 +6,9 @@
   "bugs": {
     "url": "https://github.com/Megapixel99/CAS-Authentication-User/issues"
   },
-  "bundleDependencies": [],
   "dependencies": {
     "xml2js": "^0.6.2"
   },
-  "deprecated": false,
   "description": "A CAS authentication library designed to be used as middleware for an Express server.",
   "engines": {
     "node": ">=20"
