@@ -34,7 +34,11 @@ OFF_SITE.forEach(([label, value]) => {
     });
     const res = makeRes();
     casOf().bounce_redirect(req, res, makeNext());
-    assert.deepStrictEqual(res.redirects, ['/authenticate'],
+    // The site root, not the request path. Falling back to the request path
+    // sent the client to the route they were already on, in the same state,
+    // which the browser followed straight back into this handler for ever - so
+    // every value in this list turned a refusal into a redirect loop.
+    assert.deepStrictEqual(res.redirects, ['/'],
       `${value} must not become a redirect target`);
   });
 
@@ -90,25 +94,45 @@ test('an off-site returnTo cannot survive a full login round trip', async () => 
   }
 });
 
-test('bounce_redirect without returnTo keeps the current path and query', () => {
+/**
+ * bounce_redirect exists to send an authenticated client somewhere else, and
+ * `returnTo` is how it is told where. Without one there is no destination, and
+ * the previous answer - the URL the client is already at - was a redirect to
+ * this same handler, which redirected again, for ever. Every browser that
+ * followed it gave up with a redirect-loop error, on the plainest possible
+ * request: GET /authenticate with no query string at all.
+ */
+test('bounce_redirect without returnTo goes to the site root rather than looping', () => {
   const req = makeReq({
     session: { cas_user: 'casuser' }, url: '/authenticate?flow=sso', path: '/authenticate',
   });
   const res = makeRes();
   casOf().bounce_redirect(req, res, makeNext());
-  assert.deepStrictEqual(res.redirects, ['/authenticate?flow=sso']);
+  assert.deepStrictEqual(res.redirects, ['/']);
 });
 
-test('bounce_redirect keeps a router mount prefix', () => {
+test('bounce_redirect at the site root passes the request through instead', () => {
+  // Redirecting to `/` from `/` is the same loop by another name, so the
+  // authenticated request is handed to the application instead.
+  const req = makeReq({ session: { cas_user: 'casuser' }, url: '/', path: '/' });
+  const res = makeRes();
+  const next = makeNext();
+  casOf().bounce_redirect(req, res, next);
+  assert.deepStrictEqual(res.redirects, []);
+  assert.strictEqual(next.calls.length, 1);
+});
+
+test('bounce_redirect keeps a router mount prefix in an honoured returnTo', () => {
   const req = makeReq({
     session: { cas_user: 'casuser' },
+    query: { returnTo: '/portal/reports' },
     originalUrl: '/portal/authenticate?flow=sso',
     url: '/authenticate?flow=sso',
     path: '/authenticate',
   });
   const res = makeRes();
   casOf().bounce_redirect(req, res, makeNext());
-  assert.deepStrictEqual(res.redirects, ['/portal/authenticate?flow=sso']);
+  assert.deepStrictEqual(res.redirects, ['/portal/reports']);
 });
 
 test('a repeated returnTo is refused rather than coerced', () => {
@@ -120,5 +144,5 @@ test('a repeated returnTo is refused rather than coerced', () => {
   });
   const res = makeRes();
   casOf().bounce_redirect(req, res, makeNext());
-  assert.deepStrictEqual(res.redirects, ['/authenticate']);
+  assert.deepStrictEqual(res.redirects, ['/']);
 });

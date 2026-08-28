@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
 const https = require('https');
-const { CASAuthentication } = require('./helpers.js');
+const { CASAuthentication, silenceErrors, collectingLogger } = require('./helpers.js');
 
 const MINIMAL = { cas_url: 'https://cas.example.edu/cas', service_url: 'https://app.example.edu' };
 
@@ -39,12 +39,34 @@ test('constructor applies documented defaults', () => {
 });
 
 test('constructor coerces boolean options', () => {
+  const restore = silenceErrors();
   const cas = new CASAuthentication({
-    ...MINIMAL, renew: 'yes', is_dev_mode: 1, destroy_session: 0,
+    ...MINIMAL, renew: 'yes', is_dev_mode: 1, dev_mode_user: 'devuser', destroy_session: 0,
   });
+  restore();
   assert.strictEqual(cas.renew, true);
   assert.strictEqual(cas.is_dev_mode, true);
   assert.strictEqual(cas.destroy_session, false);
+});
+
+/**
+ * Dev mode authenticates every request as one user without contacting CAS, so
+ * a deployment that reaches production with it on is wide open. It used to
+ * arrive in total silence on every channel.
+ */
+test('dev mode announces itself on the logger', () => {
+  const logger = collectingLogger();
+  new CASAuthentication({ ...MINIMAL, is_dev_mode: true, dev_mode_user: 'devuser', logger });
+  assert.ok(logger.messages().some((m) => /DEV MODE/.test(m)),
+    `expected a dev mode warning, got ${JSON.stringify(logger.messages())}`);
+});
+
+test('dev mode without a dev_mode_user is refused', () => {
+  // The default was '', which the library itself rejects when a real CAS server
+  // sends it: authenticated as far as the middleware is concerned, anonymous to
+  // every `if (req.session.cas_user)` in the application.
+  assert.throws(() => new CASAuthentication({ ...MINIMAL, is_dev_mode: true }),
+    /non-empty dev_mode_user/);
 });
 
 test('each CAS version selects the right validation endpoint', () => {

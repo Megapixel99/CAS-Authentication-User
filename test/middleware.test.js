@@ -66,12 +66,15 @@ test('bounce_redirect sends an authenticated client to its returnTo parameter', 
   assert.strictEqual(next.calls.length, 0);
 });
 
-test('bounce_redirect falls back to the request path when returnTo is absent', () => {
+test('bounce_redirect falls back to the site root when returnTo is absent', () => {
+  // Not the request path: that is the URL the client is already at, so the
+  // redirect returned them here to be redirected again. See the loop tests in
+  // return-to.test.js.
   const cas = casOf();
   const req = makeReq({ session: { cas_user: 'casuser' }, url: '/app?x=1' });
   const res = makeRes();
   cas.bounce_redirect(req, res, makeNext());
-  assert.deepStrictEqual(res.redirects, ['/app?x=1']);
+  assert.deepStrictEqual(res.redirects, ['/']);
 });
 
 test('login carries renew through to the CAS login URL when enabled', () => {
@@ -182,17 +185,42 @@ test('logout destroys the whole session when destroy_session is set', () => {
   assert.deepStrictEqual(res.redirects, ['https://cas.example.edu/cas/logout']);
 });
 
-test('logout still redirects when session.destroy reports an error', () => {
+/**
+ * A store that cannot delete the session record has not logged anyone out: the
+ * record is still there and still names the user. Sending the client on to the
+ * CAS logout page as though it had worked reported a success that did not
+ * happen, so the failure goes to the application's error handler instead.
+ */
+test('logout reports a failed session.destroy rather than claiming success', () => {
   const cas = casOf({ destroy_session: true });
   const req = makeReq();
   Object.defineProperty(req.session, 'destroy', {
     value: (cb) => { delete req.session; cb(new Error('store offline')); },
   });
   const res = makeRes();
+  const next = makeNext();
+  const originalError = console.error;
+  console.error = () => {};
+  cas.logout(req, res, next);
+  console.error = originalError;
+  assert.deepStrictEqual(res.redirects, []);
+  assert.strictEqual(next.calls.length, 1);
+  assert.match(next.calls[0].message, /store offline/);
+});
+
+test('logout falls back to clearing keys when the session has no destroy method', () => {
+  // cookie-session and hand-rolled session layers have no destroy(). This used
+  // to be a raw TypeError 500 that left the user logged in.
+  const cas = casOf({ destroy_session: true });
+  const req = makeReq({ session: { cas_user: 'casuser', appData: 'kept' } });
+  Object.defineProperty(req.session, 'destroy', { value: undefined });
+  const res = makeRes();
   const originalError = console.error;
   console.error = () => {};
   cas.logout(req, res, makeNext());
   console.error = originalError;
+  assert.strictEqual(req.session.cas_user, undefined);
+  assert.strictEqual(req.session.appData, 'kept');
   assert.deepStrictEqual(res.redirects, ['https://cas.example.edu/cas/logout']);
 });
 

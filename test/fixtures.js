@@ -60,6 +60,17 @@ const SAML_SUCCESS = `<?xml version="1.0" encoding="UTF-8"?>
 const SAML_SUCCESS_BARE_VALUE = SAML_SUCCESS
   .replace(/ xsi:type="xs:string" xmlns:xsi="[^"]*"/g, '');
 
+// A CAS server that releases no attributes omits the AttributeStatement
+// entirely. The 2.0/3.0 parser has always coped with the equivalent; the SAML
+// one used to reach through it and fail the whole login.
+const SAML_SUCCESS_NO_ATTR_STATEMENT = SAML_SUCCESS
+  .replace(/ *<AttributeStatement>[\s\S]*<\/AttributeStatement>\n/, '');
+
+// An attribute element carrying no value at all.
+const SAML_SUCCESS_VALUELESS_ATTR = SAML_SUCCESS
+  .replace(/ *<Attribute AttributeName="email">[\s\S]*?<\/Attribute>/,
+    '          <Attribute AttributeName="email"/>');
+
 const SAML_FAILURE = SAML_SUCCESS.replace('samlp:Success', 'samlp:RequestDenied');
 
 // A repeated attribute element, which xml2js surfaces as an array.
@@ -92,5 +103,7 @@ module.exports = {
   CAS2_EMPTY,
   SAML_SUCCESS,
   SAML_SUCCESS_BARE_VALUE,
+  SAML_SUCCESS_NO_ATTR_STATEMENT,
+  SAML_SUCCESS_VALUELESS_ATTR,
   SAML_FAILURE,
 };

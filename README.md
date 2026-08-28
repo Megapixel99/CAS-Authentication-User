@@ -58,13 +58,14 @@ let cas = new CASAuthentication({
 | service_url | _string_ | The URL of the application, registered with the CAS server as a valid service. Set this to the origin only, with no path; see [Mounting on a sub-path](#mounting-on-a-sub-path). | _(required)_ |
 | cas_version | _"1.0"\|"2.0"\|"3.0"\|"saml1.1"_ | The CAS protocol version. | _"3.0"_ |
 | renew | _boolean_ | If true, an unauthenticated client has to log in to CAS whether or not a single sign-on session already exists. Takes precedence over a gateway check, as the CAS protocol requires. | _false_ |
-| is_dev_mode | _boolean_ | If true, CAS is not contacted at all and the session variable is set to _dev_mode_user_. | _false_ |
-| dev_mode_user | _string_ | The CAS user to authenticate as while dev mode is active. | _""_ |
+| is_dev_mode | _boolean_ | If true, CAS is not contacted at all and the session variable is set to _dev_mode_user_. Every request is authenticated as that user, so this is announced on the logger at construction to make a deployment that reaches production with it on visible. | _false_ |
+| dev_mode_user | _string_ | The CAS user to authenticate as while dev mode is active. Required when `is_dev_mode` is set: a blank username is the one value the library refuses from a real CAS server, since it leaves the client authenticated to the middleware and anonymous to the application. | _""_ |
 | dev_mode_info | _Object_ | The CAS attributes to use while dev mode is active. | _{}_ |
 | session_name | _string_ | The name of the session variable holding the CAS username once the client is authenticated. | _"cas_user"_ |
 | session_info | _string_ | The name of the session variable holding the CAS attributes. A falsy value forwards no attributes, and the option is ignored under CAS 1.0, which cannot supply them. | _false_ |
 | destroy_session | _boolean_ | If true, `logout` destroys the whole session; otherwise it deletes only the keys this library writes. | _false_ |
-| timeout | _number_ | Milliseconds to wait for the CAS server to answer a ticket validation before giving up. A CAS server that accepts the connection and then never replies would otherwise hold the client's request open indefinitely, since `http.request` applies no timeout of its own. 0 waits forever. | _10000_ |
+| timeout | _number_ | Milliseconds allowed for a ticket validation to complete before it is abandoned. A deadline for the whole call, not an idle timer, so a CAS server that trickles bytes indefinitely is cut off at the budget rather than holding the client's request open. 0 waits forever. | _10000_ |
+| max_response_bytes | _number_ | Largest CAS response body to buffer, in bytes. A response past it fails the validation instead of being read into memory. 0 disables the check. | _1048576_ |
 | regenerate_session | _boolean_ | If true, the session identifier is regenerated when a client authenticates, so a session fixed by an attacker beforehand does not carry over. Data already in the session is preserved; only the identifier changes. | _true_ |
 | logger | _object_ | Where diagnostics are reported. Any object with an `error(...args)` method, which `console` and the common logging libraries all satisfy. See [Diagnostics](#diagnostics). | _console_ |
 | manage_user_type | _boolean_ | Whether this library writes and clears `req.session.userType`. Deprecated; see [The userType session key](#the-usertype-session-key). | _true_ |
@@ -117,13 +118,14 @@ app.get('/', cas.gateway, ( req, res ) => {
                 : '<html><body>Hello stranger. <a href="/login">Sign in</a></body></html>');
 });
 
-// Once authenticated, the client goes to the returnTo query parameter.
+// Once authenticated, the client goes to the returnTo query parameter, or to
+// the site root if there is none.
 app.get('/authenticate', cas.bounce_redirect);
 
 // De-authenticates with the Express server, then redirects to the CAS logout.
 app.get('/logout', cas.logout);
 
-// Redirects to the CAS login.
+// Starts a login, and completes the one CAS sends back to this route.
 app.get('/login', cas.login);
 ```
 
@@ -137,9 +139,9 @@ Three functions guard a route:
 
 Three more are route endpoints rather than guards:
 
-- `bounce_redirect`: like `bounce`, except that an authenticated client is sent to the `returnTo` query parameter.
-- `login`: redirects to the CAS login page.
-- `logout`: clears the session keys this library writes (or destroys the whole session) and redirects to the CAS logout page.
+- `bounce_redirect`: like `bounce`, except that an authenticated client is sent to the `returnTo` query parameter. Without a usable `returnTo` there is no destination to send them to, so they go to the site root; the request path is not a fallback, because that is the route they are already on. See [Where an authenticated client lands](#where-an-authenticated-client-lands).
+- `login`: sends an unauthenticated client to the CAS login page, and completes the round trip when CAS returns them to this route with a ticket. A client who is already authenticated is sent onward rather than back to CAS.
+- `logout`: clears the session keys this library writes (or destroys the whole session), calls `req.logout()` when Passport is present, and redirects to the CAS logout page.
 
 ## Gateway mode
 
@@ -249,7 +251,7 @@ declare module 'express-session' {
 
 Attribute names released under CAS 2.0 and 3.0 arrive lower-cased, because they arrive as XML tags and the parser normalizes tag names; a CAS `displayName` therefore reaches the session as `displayname`. SAML 1.1 preserves the case as sent, since it carries the name in an XML attribute instead.
 
-Attribute values are typed as `CASAttributeValue`, which is deliberately wider than `string`: a nested CAS attribute comes through as an object, and a SAML 1.1 value carrying no `xsi:type` comes through as `undefined`. Narrow before use.
+Attribute values are typed as `CASAttributeValue`, which is deliberately wider than `string`: a nested CAS attribute comes through as an object, and a SAML 1.1 `<Attribute/>` with no value at all comes through as `undefined`. Narrow before use.
 
 ```typescript
 const raw = req.session.cas_userinfo?.memberOf;
@@ -260,19 +262,27 @@ const groups = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : [];
 
 ### The returnTo parameter
 
-`bounce_redirect` and `login` both accept a `returnTo` query parameter naming where to send the client once they are authenticated. That value arrives from the client, so only a same-origin path is accepted: it has to begin with a single `/`. An absolute URL, a protocol-relative `//host` path, the `/\host` variant some browsers normalize into one, and a scheme such as `javascript:` are all refused, and the client goes to the path they requested instead.
+`bounce_redirect` and `login` both accept a `returnTo` query parameter naming where to send the client once they are authenticated. That value arrives from the client, so only a same-origin path is accepted: it has to begin with a single `/`. An absolute URL, a protocol-relative `//host` path, the `/\host` variant some browsers normalize into one, and a scheme such as `javascript:` are all refused, and the client goes to the site root instead.
+
+A fragment is kept for the client and withheld from CAS: `returnTo=/reports#summary` sends `https://app.example.com/reports` as the service URL and redirects to `/reports#summary` at the end. Sending the fragment to CAS would bring the ticket back *inside* it, where the application cannot read it.
 
 The restriction is not tidiness. Without it, an attacker could hand a victim a link that logs them in at the genuine CAS server and then lands them on a site of the attacker's choosing, which is a phishing flow with a real login in the middle of it. Versions before 0.3.0 redirected to whatever `returnTo` contained (which is why 0.3.0 is a minor bump rather than a patch).
 
+### Where an authenticated client lands
+
+`bounce_redirect` and `login` are meant to be mounted at a login route, which makes that route the one place they must never send anybody. An absent or rejected `returnTo` used to fall back to "where the client already is": the same URL, in the same state, which the browser followed straight back into the same handler until it gave up with a redirect-loop error. That happened on a plain `GET /login` with no query string at all, and after a completely successful CAS login. The fallback is now the site root, and a `bounce_redirect` mounted at the root passes the request through to the application instead of redirecting.
+
 ### The request path
 
-`returnTo` is not the only client-controlled value that decides where a redirect lands. The request path does too: `bounce_redirect` falls back to it when no `returnTo` is supplied, and it forms the service URL sent to CAS. A path is not automatically same-origin, because `//host` is protocol-relative and `/\host` is the variant browsers normalize into one.
+`returnTo` is not the only client-controlled value that decides where a redirect lands. The request path does too, since it forms the service URL sent to CAS. A path is not automatically same-origin, because `//host` is protocol-relative and `/\host` is the variant browsers normalize into one, and because a path containing `..` can be *normalized into* one, which is a different problem with the same ending.
 
 Request URLs are parsed with the WHATWG `URL` API against a base that cannot exist, and a path that resolves away from that base is replaced with `/`. Node's legacy `url.parse` reported both forms above as a *pathname*, so a client sent to `/\bad.example.com` on a `bounce_redirect` route was redirected off-site — with no CAS round trip involved, since an already authenticated client never reaches one. Node documents that parser as [DEP0169](https://nodejs.org/api/deprecations.html#dep0169-insecure-urlparse), noting that CVEs are not issued against it.
 
+Reading the origin back is necessary and, until 0.5.0, was not sufficient. `//bad.example.com` does resolve to another origin and was caught; `/..//bad.example.com` does not. The dot segment is resolved away, leaving *this* origin with a pathname of `//bad.example.com`, which is protocol-relative again the moment it reaches a `Location` header and which the origin check never sees. `/%2e%2e//host`, `/a/b/../../..//host` and `/../\host` all normalize to the same thing, the last of them manufacturing the exact `/\host` shape the `returnTo` check rejects on sight. The pathname is now checked alongside the origin. This is the third instance of this bug in this package, after `returnTo` in 0.3.0 and the request path in 0.4.0, and the first two fixes could not have caught it: both inspect the value as it arrives, while this one is produced by the parser itself.
+
 ### Query strings and the login round trip
 
-The service URL sent to CAS is the request path without its query string, so page parameters are never handed to the CAS server (nor written into its access logs, which is where a `?token=` would otherwise come to rest). The trade-off is that a client sent to CAS from `/search?q=cats` returns to `/search`, so pass `returnTo` where the destination matters:
+The service URL sent to CAS is the request path without its query string, so page parameters are never handed to the CAS server (nor written into its access logs, which is where a `?token=` would otherwise come to rest). The client's own query string is remembered in the session and restored at the end of the round trip, so a visitor sent to CAS from `/search?q=cats` lands back on `/search?q=cats`. Only a client whose session does not survive the round trip loses it, and then `returnTo` carries the destination explicitly:
 
 ```javascript
 app.get('/search', cas.bounce, handler);   // returns to /search
@@ -295,7 +305,7 @@ Set `service_url` to the application's origin and leave the mount prefix out of 
 
 ### The userType session key
 
-`req.session.userType` is not part of the CAS protocol, and nothing in this library reads it. The library blanks it on every unauthenticated pass and deletes it on logout; populating it is left to the application. That is a library reaching into an application's own session state, and it is deprecated.
+`req.session.userType` is not part of the CAS protocol, and nothing in this library reads it. The library blanks it when it sends a client to CAS and deletes it on logout; populating it is left to the application. (It is not blanked on the paths that never reach CAS: a `block` route answering 401, or a gateway check passing an anonymous client through.) That is a library reaching into an application's own session state, and it is deprecated.
 
 ```javascript
 let cas = new CASAuthentication({
@@ -356,6 +366,29 @@ The session identifier is regenerated when a client authenticates. Without that,
 
 `logout` removes every session key this library writes: the CAS username, the CAS attributes, `cas_return_to`, the gateway flag, and — while `manage_user_type` is on — `userType`. That last one matters most, since it is what applications tend to authorise on, and leaving the previous user's value behind while their username is gone invites acting on a privilege that is no longer held; an application that has [opted out](#the-usertype-session-key) clears it itself. With `destroy_session: true` the whole session goes instead.
 
+It also calls `req.logout()` when Passport has installed one, since Passport keeps the authenticated user under a session key this library does not own. Without that step a client who signed in through the bundled strategy was shown the CAS logout page and stayed signed in to the application.
+
+A store that fails to write the cleared session, or to destroy it, is reported through `next(err)` rather than answered with the redirect to CAS: a logout that could not be persisted has not happened, and saying so is better than a page that claims otherwise.
+
+### Known limitations
+
+These are real, reproduced, and not fixed here, either because the CAS protocol leaves no room to fix them or because the fix belongs in the application.
+
+- **A ticket is not bound to the login that started it.** CAS has no `state` parameter, so nothing ties a `?ticket=` arriving at the application to a login this browser began. Anyone who obtains a ticket for the service can send a victim's browser to a URL carrying it and log that browser in as themselves: login CSRF, whose payoff is the victim acting in the attacker's account rather than the reverse.
+- **One destination per session.** The post-login destination lives in a single session key, so two tabs authenticating at once can send the user to the page the other tab asked for. Passing `returnTo` explicitly does not help: the last write wins.
+- **A `returnTo` is checked for origin, not for reachability.** A path that no route serves, or one that is served by a route with no CAS middleware on it, is accepted; in the second case the ticket arrives somewhere nothing validates it, and the client lands anonymous. Point `returnTo` at a guarded route.
+- **A client whose cookies never persist cannot complete a login.** `bounce` will send them to CAS on every request, since a session is what a login produces. Gateway mode is the bounded case, and is bounded deliberately: one CAS round trip per page view, never a loop.
+- **Data an attacker put in a session before login survives the regeneration.** The session id rotates, which is what stops session fixation, but application keys are copied to the new session, so a value planted beforehand is still there afterwards. An application that reads its own session keys as trusted input should clear them on login.
+- **A gateway check is made once per session.** A client who signs in at CAS after being checked is not noticed again until the gateway flag is cleared or the session ends.
+- **A spent ticket in the address bar is answered with a bare 401.** A `?ticket=` that CAS has already consumed (reached by a refresh, or by pressing Back after logging out) fails validation on a `bounce` route, and `bounce` answers a failed validation with 401 rather than starting a fresh login. The client sees an unstyled error page with no way forward but editing the URL.
+- **An already authenticated client keeps an unspent ticket in the address bar.** The session is checked before the query string, so a `?ticket=` on a request from a client who is already logged in is never consumed, and stays in history, in `Referer` and in any proxy log, valid because nothing has redeemed it.
+- **A reverse proxy that rewrites the path cannot be configured.** `service_url` is the only knob, and it has to be both the origin the browser sees and the prefix the application is mounted under. With `proxy_pass http://app/` stripping a `/portal` prefix those two differ, and there is no `base_path` option to separate them. Proxy the prefix through unchanged instead.
+- **`manage_user_type: false` leaves `userType` to survive a login.** The application owns the key in that mode, and session regeneration copies it to the new session, so the mechanism that looks like it clears the slate is what carries the previous user's value across. Clear it on login, or set `destroy_session: true`.
+- **The Passport strategy uses a subset of the options.** It builds a `CASAuthentication` from whatever it is given, but only the CAS-facing options reach the protocol; `is_dev_mode` in particular does nothing there, and a `{ gateway: true }` check still needs a session middleware, or `{ session: false }`, because Passport establishes the login itself.
+- **The strategy has no `callbackURL`.** The route that starts the flow is the route CAS returns to, so `passport.authenticate('cas')` has to be mounted on both. A `callbackURL` passed to the constructor is accepted and ignored.
+- **The strategy redirects an XHR to the CAS login page.** Passport's `redirect()` is a 302 to a cross-origin HTML page, which a `fetch` caller cannot act on, and neither a custom callback nor `failureRedirect` converts it into a 401. The core middleware's `block` is the entry point for endpoints answering XHR.
+- **`{ cas: instance }` is matched with `instanceof`.** Two copies of this package in one dependency tree (a transitive one alongside a direct one) produce two distinct constructors, so an instance built from the other copy fails the check and is silently replaced by a new one built from the same options.
+
 ## Tests
 
 ```
@@ -365,6 +398,28 @@ $ npm test
 That runs the suite on [Node's built-in test runner](https://nodejs.org/api/test.html) and then type-checks the declarations against a file written the way a consumer would write one. No CAS server is needed, since the tests stand up a local HTTP server that answers as one; `test/session-integration.test.js` and `test/passport-integration.test.js` go further and drive the middleware through real Express, real express-session and real Passport over real HTTP (no doubles for any of the three), which is what catches the class of bug a hand-written session double hides.
 
 CI runs both commands on Node 20, 22, 24 and 26. A second job covers what no test can: the `files` field decides what a consumer actually receives, so that job packs the tarball, installs it into an empty project with `--omit=dev`, and checks that both entry points load with xml2js as the only dependency present. Of those four versions only 22, 24 and 26 are still in support (Node 20 reached end of life on 2026-04-30); 20 is there because the institutions this package is aimed at upgrade slowly, and knowing it still works is worth a job.
+
+## Upgrading to 0.5.0
+
+Two changes are security fixes, and several fix loops that a browser reports to the user as a broken site.
+
+- **A request path that *normalizes* to another origin no longer reaches `res.redirect`.** `/..//bad.example.com` resolves its dot segment away and leaves this origin with a pathname of `//bad.example.com`, which is protocol-relative once written into a `Location` header. The origin check added in 0.4.0 never saw it. The third instance of this bug in this package; see [The request path](#the-request-path).
+- **The ticket and host interpolated into the SAML 1.1 SOAP request are escaped.** Both were written into the XML raw, and the ticket arrives from the client's query string.
+
+Behaviour that changes, in rough order of how likely you are to notice:
+
+- **`bounce_redirect` sends a client with no usable `returnTo` to the site root**, where it used to send them to the URL they were already on: a redirect to itself, which browsers follow until they give up. Mounted at the site root it now calls `next()` instead. See [Where an authenticated client lands](#where-an-authenticated-client-lands).
+- **`login` is a complete login endpoint rather than an unconditional redirect to CAS.** Mounted as `app.get('/login', cas.login)`, as the README has always shown, it now validates the ticket CAS returns to that route and sends an already-authenticated client onward. Previously each hop bounced back to CAS and cost a fresh service ticket, for ever.
+- **A gateway check keeps the visitor's query string** across the round trip, and keeps its own `cas_gateway` marker on the redirect that completes a ticket. Without the marker, a client whose session does not persist was sent to CAS on every single request.
+- **`timeout` is a deadline for the whole validation**, not a socket-inactivity timer. A CAS server trickling bytes used to reset the timer indefinitely.
+- **`logout` waits for `session.destroy()` and reports a store failure** through `next(err)` instead of redirecting as though the logout had succeeded. It also calls `req.logout()` when Passport is present, without which a client who signed in through the bundled strategy stayed signed in.
+- **A login whose session cannot be saved fails** through `next(err)` rather than redirecting the client into a loop with nothing in the log.
+- **Configuration that could not work is now refused at construction**: a `cas_url` or `service_url` whose scheme is not http or https, `is_dev_mode` without a `dev_mode_user`, and the `timeout` values (`null`, `false`, `[]`) that `Number()` quietly turned into "wait for ever". A trailing slash on either URL is trimmed rather than producing a doubled slash. Dev mode announces itself on the logger.
+- **A CAS response is refused past `max_response_bytes`** (1 MiB by default) instead of being buffered without limit.
+- **SAML 1.1 no longer fails a valid login over the shape of its attributes**: a success with no `<AttributeStatement>`, and an `<Attribute/>` with no value, both used to throw and be reported as failed authentication. An `<AttributeValue>` with no `xsi:type` now yields its text rather than `undefined`.
+- **A username that arrives as an XML element with attributes is read as text.** `<cas:user format="upn">casuser</cas:user>` used to reach the session as `[object Object]`.
+- **An exception thrown after a successful validation reaches Express**, rather than being caught by the response parser, reported as a bad CAS response, and dropped, which left the request with no response at all. In the Passport strategy a verify callback that throws now reaches `error()`.
+- **A CAS server answering with an error status is reported as such**, rather than logged as the CAS server rejecting the ticket.
 
 ## Upgrading to 0.4.0
 
