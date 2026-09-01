@@ -32,11 +32,32 @@ jobs:
       # and a failing type-check are separate lines in the run summary. The glob
       # is unquoted on purpose: the shell expands it, which Node only learned to
       # do itself in v22.
+      #
+      # Both steps are wrapped because both can pass while checking nothing, and
+      # an exit code cannot tell the two apart. `zerocase` reads the denominator
+      # out of the JUnit report the runner already wrote; `didrun` asks for a
+      # pattern in the output. A wrapper exits 3 when the evidence is missing,
+      # so "no tests" and "failing tests" are different lines in the summary.
       - name: Tests
-        run: node --test test/*.test.js
+        run: |
+          mkdir -p reports
+          node_modules/.bin/zerocase --junit reports/junit.xml --min-junit 250 -- \
+            node --test \
+              --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=junit --test-reporter-destination=reports/junit.xml \
+              test/*.test.js
 
+      # `tsc --noEmit` prints nothing when it is happy, and prints nothing just
+      # the same when `files` has drifted and it checked one declaration in
+      # isolation. `--listFiles` makes it say what it opened; nothing imports
+      # test/types/usage.ts, so that is the entry that can quietly fall out.
       - name: Type-check the shipped declarations
-        run: npm run typecheck
+        run: |
+          node_modules/.bin/didrun \
+            --expect 'index\.d\.ts' \
+            --expect 'strategy\.d\.ts' \
+            --expect 'test/types/usage\.ts' \
+            -- node_modules/.bin/tsc --noEmit --listFiles -p tsconfig.json
 
   package:
     name: Packaged artifact
